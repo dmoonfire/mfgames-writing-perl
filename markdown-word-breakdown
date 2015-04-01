@@ -1,0 +1,86 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+use utf8;
+
+# Modules
+
+#
+# Processing
+#
+
+# We need UTF-8 output.
+binmode(STDOUT, ":utf8");
+
+# Whenever we load files, we slurp the entire thing into memory.
+$/ = undef;
+
+# Start by going through all the inputs and breaking apart the words
+# along with their counts.
+my %totals = ();
+
+foreach my $file (@ARGV)
+{
+	# Go through the file and get the counts, but without the YAML
+	# header that starts most of the markdown files.
+	unless (-f $file)
+	{
+		print STDERR "Missing: $file\n";
+		next;
+	}
+
+	open INPUT, "<:encoding(UTF-8)", $file
+		or die "Cannot open file '$file' ($!)";
+	my $buffer = <INPUT>;
+	close INPUT;
+
+	# Remove the YAML header, if it is in the file.
+	$buffer =~ s/^---\n.*?\n---\n//s;
+
+	# Go through all the words in the document and count them up.
+	$buffer =~ s/\s+/ /sg;
+	my @words = split(/(\W)/, $buffer);
+
+	foreach my $word (@words)
+	{
+		# Skip whitespace.
+		next if $word =~ m@\s@;
+		next if $word =~ m@^$@;
+
+		# Make everything lowercase.
+		$word = lc $word;
+
+		# Add up the counts.
+		$totals{$word}++;
+	}
+}
+
+# Display the totals in numerical order.
+for my $word (sort { $totals{$a} <=> $totals{$b} } keys(%totals))
+{
+	printf "%8s %s\n", comma($totals{$word}), $word;
+}
+
+#
+# Formatting
+#
+
+sub comma
+{
+	my $count = "" . shift @_;
+	my $buffer = "";
+	
+	while ($count =~ s/(\d)(\d{3})$/$1/)
+	{
+		$buffer = ",$2$buffer";
+	}
+
+	$buffer = "$count$buffer";
+	return $buffer;
+}

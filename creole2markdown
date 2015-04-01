@@ -1,0 +1,138 @@
+#!/usr/bin/perl
+
+# Converts a Creole formatted file into an equivalent Markdown
+# version. This uses the convention of the '---' block for metadata at
+# the top of the file. It also pulls the LocalWords dictionary and the
+# summary up into the metadata.
+
+# USAGE: creole2markdown <directory|file>
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Modules
+use File::Find;
+use File::Basename;
+
+#
+# Command-Line Processing
+#
+
+finddepth(\&process, @ARGV);
+
+sub process
+{
+	# Pull out the elements we care about.
+	my $dir = $File::Find::dir;
+	my $filename = $_;
+	my $filepath = $File::Find::name;
+	$filepath = "./" . $filepath unless $filepath =~ /^\./;
+
+	# If it isn't a file, we don't do anything extra.
+	return unless (-f $_);
+
+	# Report what we're processing.
+	print "$filepath";
+
+	# We have two sections in the resulting MarkDown file. The top is
+	# the metadata section, which is not rendered, and the bottom is
+	# the actual contents. In the original Creole, the metadata is a
+	# "#" for the title and a bullet list of metadata, separated by a
+	# newline.
+	my @metadata = ();
+	my @contents = ();
+	my $found_blank_line = 0;
+	my $last_was_blank = 0;
+
+	# Open up a file and stream through it.
+	open INPUT, "<$filename" or die "Cannot open $filepath ($!)";
+
+	while (<INPUT>)
+	{
+		# Clean up the line.
+		chomp;
+		
+		# If we have a "#", this is a level one heading which becomes the title.
+		if ($found_blank_line)
+		{
+			# We can encounter a couple lines that will eventually
+			# become metadata. In specific, "LocalWords:" for Emacs
+			# spell-checking and "SUMMARY:" which is the summary.
+			if (/^SUMMARY:\s*(.*?)$/)
+			{
+				push @metadata, "Summary: $1";
+				next;
+			}
+
+			if (/^LocalWords:\s*(.*?)$/)
+			{
+				push @metadata, "LocalWords: $1";
+				next;
+			}
+
+			# Skip double-blank lines.
+			if ($_ =~ /^\s*$/)
+			{
+				next if $last_was_blank;
+				$last_was_blank = 1;
+			}
+			else
+			{
+				$last_was_blank = 0;
+			}
+
+			# This would be the contents.
+			push @contents, $_;
+
+			# We're done with contents.
+			next;
+		}
+
+		# Everything after this is metadata for the file, which is
+		# ended by the newline.
+		if ($_ =~ /^\s*$/)
+		{
+			# Mark that we found a blank line, which means we're done
+			# with metadata parsing.
+			$found_blank_line = 1;
+			$last_was_blank = 1;
+			next;
+		}
+
+		# For metadata, we have two types of lines. Either a "# Title"
+		# which is the title line and "* Key: Value" line which is a
+		# metdata key/value pair.
+		if (/^\=\s*(.*?)\s*$/)
+		{
+			push @metadata, "Title: $1";
+		}
+
+		if (/^\*\s*(.*?)\s*:\s*(.*?)\s*$/)
+		{
+			push @metadata, "$1: $2";
+		}
+	}
+
+	# We're finished with the input handle.
+	close INPUT;
+
+	# Figure out the filename that we'll be writing out.
+	my $basename = $filename;
+	$basename =~ s/\.txt$/.md/;
+	print " -> $basename\n";
+
+	# Open up the file handle.
+	open OUTPUT, ">$basename" or die "Cannot write to $basename ($!)";
+
+	print OUTPUT "---\n";
+	print OUTPUT join("\n", @metadata), "\n";
+	print OUTPUT "---\n";
+	print OUTPUT join("\n", @contents), "\n";
+
+	close OUTPUT;
+}

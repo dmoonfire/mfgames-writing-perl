@@ -1,0 +1,255 @@
+#!/usr/bin/perl
+
+# A Perl script that uses `git diff` to build up a simple summary of
+# changes from the current uncommited changes and the latest
+# commit. This can be used to compare an older version to the current
+# one by using a "mixed" reset.
+
+# USAGE: summarize-git-differences.pl *.markdown > summary.txt
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Modules
+use Algorithm::Diff qw(diff LCS);
+use Data::Dumper;
+use Getopt::Long;
+
+#
+# Parameters
+#
+
+my $before = undef;
+my $after = undef;
+
+&GetOptions(
+	"before|b=s" => \$before,
+	"after|a=s" => \$after,
+	);
+
+# Figure out the parameters.
+my $range = "";
+
+if (defined($before) || defined($after))
+{
+	if (defined $before)
+	{
+		$range = "$before ";
+	}
+
+	if (defined $after)
+	{
+		$range = "$after ";
+	}
+
+	$range = "-- ";
+}
+
+#
+# Processing
+#
+
+# All line operations slurp in the entire file.
+$/ = undef;
+
+# Go through all the Markdown files.
+my $chapter = 0;
+my $additions = 0;
+my $deletions = 0;
+
+while (@ARGV)
+{
+	# Get the filename.
+	my $filename = shift @ARGV;
+
+	print STDERR "Processing $filename\n";
+
+	# Read in this entire file so we can identify the chapters properly.
+	open INPUT, "<$filename" or die "Cannot open $filename ($!)";
+	my $file = <INPUT>;
+	close INPUT;
+
+	my @file = split(/\n/, $file);
+
+	# Use `git` to figure out the differences. We slurp in the entire
+	# results just to simplify processing.
+	open PIPE, "git diff $range '$filename' |"
+		or die "Cannot open git pipe ($!)";
+	my $diff = <PIPE>;
+	close PIPE;
+
+	my @diff = split(/\n/, $diff);
+
+	# Report what we've read.
+	print STDERR "  Input: ", scalar(@file), ", Diff: ", scalar(@diff), "\n";
+
+	# Get the name of the file for reporting purposes.
+	unless ($file =~ /\n[Ti]itle: (.*?)\n/)
+	{
+		print STDERR "  Cannot find title\n";
+		next;
+	}
+
+	my $title = $1;
+
+	# Format the chapter for the summary file.
+	$chapter++;
+
+	print STDERR "  Title: $title\n";
+	print "Chapter $chapter: $title\n";
+	print "==========", "=" x (length($chapter) + length($title)), "\n";
+	print "\n";
+
+	# Go through the diff and build up a summary of everything that
+	# changed.
+	for (my $di = 0; $di < @diff; $di++)
+	{
+		# Get the line.
+		my $d = $diff[$di];
+
+		# We don't need the diff header elements.
+		next if $d =~ /^\+\+\+ b/;
+		next if $d =~ /^--- a/;
+		next if $d =~ /^@@ /;
+
+		# We don't really care unless the line starts with a + or a -.
+		next unless $d =~ /^[\+-]/;
+
+		# Ignore YAML header stuff.
+		next if $d =~ /^[\+-]\s*\w+:/;
+
+		# If we have a -, see if the next line is a close match.
+		if ($d =~ /^-/ && ($di + 1) < @diff)
+		{
+			# Get the next line.
+			my $d2 = $diff[$di + 1];
+
+			# Convert both lines into sequences, after we remove the +
+			# or - from the beginning of the line.
+			my @d1_seq = split(/\s+/, substr($d, 1));
+			my @d2_seq = split(/\s+/, substr($d2, 1));
+
+			# Get a difference between the two.
+			my @hunks = diff(\@d2_seq, \@d1_seq);
+
+			# If we have less than 10 hunks, we have a problem. It
+			# doesn't appear to be a full diff.
+			my $is_diff = 1;
+
+			$is_diff = 0 if (@hunks == 1 && @{$hunks[0]} > 10);
+
+			if ($is_diff)
+			{
+				# Increment the counter since we skipped this line.
+				$di++;
+
+				# We need to loop through the hunks first.
+				my $offset = 0;
+
+				foreach my $hunk (@hunks)
+				{
+					# Go through each change
+					my $last_add = -1;
+
+					foreach my $delta (@$hunk)
+					{
+						# Get the elements of the delta first.
+						my ($mode, $index, $token) = @$delta;
+
+						if ($mode eq "-")
+						{
+							# If we are an addition (identified by
+							# "-"), then we just replace the existing
+							# token with a "{ADDED: }" wrapper.
+							$d2_seq[$index] = "{ADDED: $token}";
+							$last_add = $index;
+							$additions++;
+						}
+						else
+						{
+							# Increment the counters.
+							$deletions++;
+
+							# If the $last_add is -1, then we have
+							# only a remove token.
+							if ($last_add == -1)
+							{
+								splice(@d2_seq,
+									   $index + 1,
+									   0,
+									   "{REMOVED: $token}");
+								$last_add = $index;
+							}
+							else
+							{
+								# For subtraction, we insert the token.
+								splice(@d2_seq,
+									   $last_add,
+									   0,
+									   "{REMOVED: $token}");
+								$last_add++;
+							}
+						}
+					}
+				}
+
+				# Recombine the differences together.
+				my $new_d2 = join(" ", @d2_seq);
+
+				# Normalize the sequences. We use a loop to do this
+				# because it may require a number of merges to get
+				# everything pulled together.
+				my $last_d2 = "";
+
+				while ($new_d2 ne $last_d2)
+				{
+					# Save the last one so we can detect loops.
+					$last_d2 = $new_d2;
+
+					# Merge sequential ADDED and REMOVED.
+					$new_d2 =~ s@(\{ADDED: [^\}]+)\} \{ADDED: @$1 @sg;
+					$new_d2 =~ s@(\{REMOVED: [^\}]+)\} \{REMOVED: @$1 @sg;
+
+					# Swap a REMOVED followed by an ADDED.
+					$new_d2 =~ s@(\{REMOVED: [^\}]+\}) (\{ADDED: [^\}]+\})@$2 $1@sg;
+				}
+
+				# Write out the line, but only if there is at least
+				# one {}. We get a diff if the newline was removed or
+				# added at the end of the file.
+				print "$new_d2\n\n" if $new_d2 =~ /\{/;;
+			}
+
+			# If we were a diff, we're done with this line.
+			next if $is_diff;
+		}
+
+		# If the line is a blank, we have an addition.
+		if ($d eq "+")
+		{
+			if ($di + 1 < @diff)
+			{
+				print "{AFTER ABOVE PARAGRAPH}\n";
+			}
+
+			next;
+		}
+
+		# Pull out the modifications to figure out mode.
+		my $mode = "ADDED";
+		$mode = "REMOVED" if $d =~ /\^-/;
+		
+		my $para = substr($d, 1);
+
+		print "{$mode} $para\n\n";
+	}
+}
+
+# Report the final.
+print STDERR "Additions: $additions\n";
+print STDERR "Deletions: $deletions\n";

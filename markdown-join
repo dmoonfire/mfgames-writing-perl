@@ -1,0 +1,111 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Modules
+use Getopt::Long;
+use YAML;
+
+#
+# Arguments
+#
+
+my $OUTPUT = "-";
+my @STRIP_YAML = ();
+my $CHAPTER_OFFSET = undef;
+
+&GetOptions(
+	"output=s" => \$OUTPUT,
+	"strip=s" => \@STRIP_YAML,
+	"chapter=i" => \$CHAPTER_OFFSET,
+	);
+
+#
+# Output File
+#
+
+my $out = *STDOUT;
+
+if ($OUTPUT ne "-")
+{
+	open $out, ">$OUTPUT" or die "Cannot write to $OUTPUT ($!)";
+}
+
+#
+# Processing
+#
+
+# Whenever we load files, we slurp the entire thing into memory.
+$/ = undef;
+
+# Go through each markdown file and combine them together.
+my $chapter = 0;
+
+foreach my $file (@ARGV)
+{
+	# Go through the file and get the count, but without the YAML
+	# header that starts most of the markdown files.
+	unless (-f $file)
+	{
+		printf STDERR "Cannot find $file\n";
+		next;
+	}
+
+	open INPUT, "<$file" or die "Cannot open file '$file' ($!)";
+	my $buffer = <INPUT>;
+	close INPUT;
+
+	# Split the file into the YAML header and the Markdown body.
+	unless ($buffer =~ m/^---\n(.*?\n)---\n\s*(.*)\s*$/s)
+	{
+		printf STDERR "Cannot parse $file as a YAML+Markdown file\n";
+		next;
+	}
+
+	# Pull out the compontents.
+	my $yaml_text = $1;
+	my $contents = $2;
+
+	# Parse the YAML so we can make modifications.
+	my ($yaml) = Load($yaml_text);
+
+	foreach my $strip (@STRIP_YAML)
+	{
+		delete $$yaml{$strip} if exists $$yaml{$strip};
+	}
+
+	# Figure out if we have a chapter line.
+	my $chapter_text = "";
+
+	if (defined $CHAPTER_OFFSET)
+	{
+		$chapter_text = sprintf("Chapter: %d\n", $chapter + $CHAPTER_OFFSET);
+	}
+
+	$chapter++;
+
+	# Write it out to the buffer.
+	$yaml_text = Dump($yaml);
+	$yaml_text =~ s/^---\s*//s;
+	$yaml_text = $chapter_text . $yaml_text;
+	$yaml_text =~ s/\s+$//sg;
+
+	print $out join(
+		"\n",
+		"---",
+		$yaml_text,
+		"---",
+		"",
+		$contents), "\n";
+}
+
+if ($OUTPUT ne "-")
+{
+	close $out;
+}

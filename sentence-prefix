@@ -1,0 +1,103 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+#
+# Parse the input
+#
+
+while (<>)
+{
+	# Ignore commented lines.
+	next if /^\#/;
+
+	# If the line is blank, just output a line break.
+	if (/^\s*$/)
+	{
+		print "\n";
+		next;
+	}
+
+	# Clean up the line and get rid of the newlines.
+	s/^\s*//sg;
+	s/\s*$//sg;
+
+	# First split the line on the periods. It isn't perfect, but
+	# should give a rough sentence start.
+	my @sentances = split(/\.\s+/);
+	my @counts = ();
+
+	foreach my $sentance (@sentances)
+	{
+		# For each sentence, we split apart the spaces to get the words.
+		my @words = split(/\s+/, $sentance);
+
+		# Figure out how many words are in the sentences.
+		my $count = scalar(@words);
+		push @counts, $count;
+
+		# We only care about the first five words in the sentence.
+		my @prefix = splice(@words, 0, 5);
+
+		# Print out the sentence and its length. We also include the
+		# line number so we can easily jump to that line.
+		print "$.: ", join(" ", @prefix), " ($count)\n";
+	}
+
+	# Calculate the std. dev. for the counts. If there is a small
+	# average, then we have too much of a consistent sentence length.
+
+	# Put in a summary for the paragraph.
+	my $stddev = stddev(@counts);
+
+	if ($stddev > 0)
+	{
+		printf(
+			"-- %d sentences, %.1f median, %.1f stddev\n",
+			scalar(@counts),
+			median(@counts),
+			stddev(@counts));
+	}
+}
+
+sub median
+{
+	# Get a total of all the counts.
+	my $total = 0;
+
+	foreach (@_)
+	{
+		$total += $_;
+	}
+
+	# Average it out by dividing by the number of elements.
+	my $average = $total / scalar(@_);
+	return $average;
+}
+
+sub stddev
+{
+	# StdDev doesn't mean anything with no elements, so just return 0.
+	return 0 if @_ <= 1;
+
+	# Figure out the median value.
+	my $average = median(@_);
+
+	# Figure out the total of the squares differences from the median.
+	my $total = 0;
+
+	foreach (@_) 
+	{
+		$total += ($average - $_) ** 2;
+	}
+
+	# Calculate the StdDEv and return it.
+	my $std = ($total / (@_ - 1)) ** 0.5;
+	return $std;
+}

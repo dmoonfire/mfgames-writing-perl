@@ -1,2 +1,3 @@
-# mfgames-writing-perl
-Various Perl utilities useful for writing novels and stories.
+# MfGames Writing Perl
+
+This is a library of various Perl scripts that are useful while writing novels and stories. The bulk of them are geared around Markdown files with a YAML header.

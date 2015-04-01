@@ -1,0 +1,78 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Modules
+
+#
+# Processing
+#
+
+# Whenever we load files, we slurp the entire thing into memory.
+$/ = undef;
+
+# Start by going through all the inputs and counting their words.
+my $total = 0;
+
+foreach my $file (@ARGV)
+{
+	# Go through the file and get the count, but without the YAML
+	# header that starts most of the markdown files.
+	unless (-f $file)
+	{
+		printf "%8s %s\n", "missing", $file;
+		next;
+	}
+
+	open INPUT, "<$file" or die "Cannot open file '$file' ($!)";
+	my $buffer = <INPUT>;
+	close INPUT;
+
+	# Remove the YAML header, if it is in the file.
+	$buffer =~ s/^---\n.*?\n---\n//s;
+
+	# Count the remaining words in the buffer.
+	$buffer =~ s/\s+/ /sg;
+	my $count = scalar(split(/ /, $buffer));
+
+	# Write out the line.
+	my $fmt = comma($count);
+	printf "%8s %s\n", $fmt, $file;
+
+	# Add to the total.
+	$total += $count;
+}
+
+# Format the total line, but only if we had more than one.
+if (@ARGV > 1)
+{
+	my $average = int($total / scalar(@ARGV));
+
+	print "\n";
+	printf "%8s total\n", comma($total);
+	printf "%8s average\n", comma($average);
+}
+
+#
+# Formatting
+#
+
+sub comma
+{
+	my $count = "" . shift @_;
+	my $buffer = "";
+	
+	while ($count =~ s/(\d)(\d{3})$/$1/)
+	{
+		$buffer = ",$2$buffer";
+	}
+
+	$buffer = "$count$buffer";
+	return $buffer;
+}

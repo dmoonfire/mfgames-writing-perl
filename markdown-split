@@ -1,0 +1,116 @@
+#!/usr/bin/perl
+
+# USAGE: markdown-split (input_file|-) printfPath
+#   printfPath: "/name/of/pfile/chapter-%02d.markdown"
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Modules
+use Getopt::Long;
+use YAML;
+
+#
+# Arguments
+#
+
+my @STRIP_YAML = ();
+my $CHAPTER_OFFSET = 1;
+
+&GetOptions(
+	"strip=s" => \@STRIP_YAML,
+	"chapter=i" => \$CHAPTER_OFFSET,
+	);
+
+# Check remaining arguments.
+if (@ARGV != 2)
+{
+	print STDERR 'USAGE: markdown-split (input_file|-) printfPath', "\n";
+	print STDERR '   printfPath: "/name/of/pfile/chapter-%02d.markdown', "\n";
+	exit 1;
+}
+
+my $input = shift @ARGV;
+my $format = shift @ARGV;
+
+unless ($format =~ m@%@)
+{
+	print STDERR "Second argument ($format) does not appear to be a printf format\n";
+	exit 1;
+}
+
+#
+# Input File
+#
+
+# Create a handle to the file.
+my $in = *STDIN;
+
+if ($input ne "-")
+{
+	open $in, "<$input" or die "Cannot read from $input ($!)";
+}
+
+# Whenever we load files, we slurp the entire thing into memory.
+$/ = undef;
+
+# Slurp in the entire file.
+my $buffer = <$in>;
+
+# Close the handle.
+close $in if $input ne "-";
+
+#
+# Processing
+#
+
+# First split the file on "---" since that typically will give us the
+# correct separators. However, "---" is also used for a section/scene
+# break in the text. To identify these, we look to see if there is a
+# blank line after the "---" to determine if it is a break or not.
+my @parts = split(/---\n/s, $buffer);
+
+# Always skip the first one because it's blank (we start files with ---).
+shift @parts;
+
+# Loop through the parts and write each one into either a new file or
+# appending to the current one.
+my $index = $CHAPTER_OFFSET;
+my $out = undef;
+my $is_yaml = 1;
+
+for my $part (@parts)
+{
+	# If we think we are in the yaml, we need to check the block to
+	# see if it is actually a Markdown block for a section break.
+	if ($is_yaml)
+	{
+		$is_yaml = 0 unless $part =~ m@^(\w+):\s+@;
+	}
+
+	# Figure out if we need to open a new file.
+	if ($is_yaml)
+	{
+		# Open up a new file.
+		close $out if defined $out;
+		
+		my $spec = sprintf($format, $index++);
+		
+		open $out, ">" . $spec or die "Cannot open $spec ($!)";
+	}
+
+	# Write out the block.
+	print $out "---\n";
+	print $out $part;
+
+	# Swap out the flags.
+	$is_yaml = !$is_yaml;
+}
+
+# Close any file we might have open.
+close $out if defined $out;
