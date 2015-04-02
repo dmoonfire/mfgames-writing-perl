@@ -1,0 +1,85 @@
+#!/usr/bin/perl
+
+# A conversion utility that converts a Emacs-formatted LocalWords into
+# a `local.words` file. This will overwrite the dictionary, so all of
+# the applicable files need to be included in the same call.
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Dictionary
+my %dictionary = ();
+
+#
+# Process
+#
+
+# Go through the files.
+foreach my $file (@ARGV)
+{
+	# Read the file into memory.
+	my $changed = 0;
+	my @lines = ();
+
+	# Open up the file and read through it.
+	open FILE, "<", $file
+		or die "Cannot read $file ($!)";
+
+	while (<FILE>)
+	{
+		# Pull in the line and clean it up.
+		chomp;
+
+		my $line = $_;
+
+		# Check to see if have a LocalWords line.
+		if ($line =~ m@^\s*LocalWords:\s*(.*?)$@)
+		{
+			# Add each of these words into the dictionary.
+			my $words = $1;
+			my @words = split(/\s+/, $words);
+
+			map { $dictionary{$_} = 1 } @words;
+
+			# We changed this file since we are removing the LocalWords.
+			$changed = 1;
+			next;
+		}
+
+		# Otherwise, just write it out.
+		push @lines, $line;
+	}
+
+	close FILE;
+
+	# If we have changes, write it out.
+	if ($changed)
+	{
+		open FILE, ">", $file
+			or die "Cannot write $file ($!)";
+		print FILE join("\n", @lines), "\n";
+		close FILE;
+	}
+}
+
+#
+# Dictionary
+#
+
+# Open a handle to local.words.
+open DICT, ">", "local.words" 
+	or die "Cannot write local.words ($!)";
+
+# Write out the dictionary.
+foreach my $key (sort keys %dictionary)
+{
+	print DICT "* $key\n";
+}
+
+# Finish up the file.
+close DICT;

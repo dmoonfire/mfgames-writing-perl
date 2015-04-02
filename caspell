@@ -1,0 +1,508 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Modules
+use File::Basename;
+use Cwd qw(abs_path);
+use Getopt::Long;
+use IO::Handle;
+use IO::Pty;
+use IPC::Open2;
+use List::Util qw(first);
+
+Getopt::Long::Configure("pass_through");
+
+# Parameters
+my $ASPELL = "/usr/bin/aspell";
+my $LOCAL_DIR;
+my $LOG_CONSOLE = 0;
+my $LOG_FILE = "/tmp/caspell.log";
+my $REWRITE = 0;
+my $EMACS = 0;
+my $IS_LOADED = 0;
+
+&GetOptions(
+	"--rewrite!" => \$REWRITE,
+	"--emacs!" => \$EMACS,
+	"--verbose-console!" => \$LOG_CONSOLE,
+	"--verbose-file=s" => \$LOG_FILE,
+	# We grab -p here to strip it off the aspell's command line.
+	"-p=s" => \$LOCAL_DIR);
+
+# Dictionary
+my @comments = ();
+my @directives = ();
+
+my %dictionary = ();
+my %dictionary_include = ();
+my %replacements = ();
+my %replacements_include = ();
+my %suggestions = ();
+my %suggestions_include = ();
+
+#
+# Command Line
+#
+
+# Check to see if we have a rewrite option.
+if ($REWRITE)
+{
+	load_dictionary();
+	save_dictionary();
+}
+
+if ($EMACS)
+{
+	load_dictionary();
+	write_emacs_abbrev();
+}
+
+if ($REWRITE || $EMACS)
+{
+	exit 0;
+}
+
+# Automatically flush the output.
+$|++;
+
+# See if we are in pipe mode, which is the "-a" flag.
+my $a_index = first { $ARGV[$_] eq "-a" } 0..$#ARGV;
+
+if (defined $a_index)
+{
+	# Load the dictionary into memory. We have "auto-revert" just to
+	# make it easier to debug.
+	log_line("-*- auto-revert -*-");
+	load_dictionary();
+
+	# Create the bidirectional pipe to `aspell`.
+	my $reader = new IO::Pty;
+	my $writer = new IO::Pty;
+
+	my $pid = open2($reader, $writer, "$ASPELL " . join(" ", @ARGV));
+
+	# Make sure whatever we write, we flush out.
+	$writer->autoflush(1);
+
+	# Grab the first line which is always the version.
+	my $got = $reader->getline;
+	print $got;
+
+	# Now process through the standard input.
+	my $input = " ";
+
+	while ($input ne "")
+	{
+		# Get the input from the pipe.
+		$input = <STDIN>;
+		last unless defined $input;
+		chomp($input);
+
+		# If the command starts with a "&", then we are adding a
+		# lowercase version of the word. We basically modify it and
+		# replace it with a "*" command which is add word.
+		if (defined $LOCAL_DIR && $input =~ s@^\&@@)
+		{
+			$input = "*" . lc($input);
+		}
+
+		# If we start with a "*", then we need to add the word to the
+		# dictionary. We add this to our internal dictionary instead
+		# of aspell's personal dictionary.
+		if (defined $LOCAL_DIR && $input =~ s@^\*@@)
+		{
+			# Make sure our dictionary is loaded.
+			log_line("add:", $input);
+
+			unless (exists $dictionary{input})
+			{
+				$dictionary{$input} = 1;
+				save_dictionary();
+			}
+			
+			# We don't need to do anything.
+			next;
+		}
+
+		# Pass it into `aspell`.
+		log_line("in: ", $input);
+		$writer->print("$input\n");
+
+		# Ignore the non-output lines.
+		next if $input =~ m/^[\@\!\-\%\#\*\&]/;
+
+		# For everything else, just pass it over and parse the
+		# results. We have a blank line to indicate we are done
+		# answering.
+
+		# Read the input from the pipe.
+		my $index = 0;
+		my $is_search = 0;
+		$is_search = 1 if $input=~ m@^\^@;
+		my $sent_response;
+
+		while (1)
+		{
+			# Read in the line from the pipe.
+			$index++;
+			$got = $reader->getline;
+
+			# See if we are processing a suggestion.
+			if ($got =~ m@^\& (.*?) @s)
+			{
+				# See if we know about the word.
+				my $search = $1;
+
+				if (check_word($search))
+				{
+					# This is a valid word, so skip it.
+					next;
+				}
+
+				if (check_suggestion($search))
+				{
+					$sent_response = 1;
+					next;
+				}
+
+				# We don't, so pass it out.
+				$sent_response = 1;
+			}
+
+			# If we are done, then see if we sent at least one response.
+			print "*\n" if (!$sent_response && $got =~ m@^\s*$@s);
+
+			# Write out to the system.
+			log_line("out:", $got);
+			print "$got";
+
+			# If we have a blank line.
+			last if ($got =~ m@^\s*$@s);
+		}
+	}
+	
+	# We're done with pipe processing.
+	exit 0;
+}
+
+# For everything else, just pass it on.
+system($ASPELL, @ARGV);
+my $return_code = $? >> 8;
+exit $return_code;
+
+#
+# Dictionary Processing
+#
+
+sub load_dictionary
+{
+	# If we don't have a dictionary, skip it.
+	return unless defined $LOCAL_DIR;
+	return if $IS_LOADED;
+	$IS_LOADED = 1;
+
+	# Load the dictionary file.
+	my $local_dict = "$LOCAL_DIR/local.words";
+
+	load_dictionary_file(
+		$LOCAL_DIR,
+		$local_dict,
+		\%dictionary,
+		\@directives,
+		\@comments,
+		\%suggestions,
+		\%replacements);
+}
+
+sub load_dictionary_file
+{
+	# Pull out the arguments.
+	my ($dir, $file, $dict, $cmds, $cmts, $suggests, $replaces) = @_;
+
+	# Figure out the filename. If we don't have it, we don't have
+	# anything to do.
+	log_line("Using dictionary: $file");
+
+	return unless -f $file;
+
+	# Load the dictionary into memory.
+	my $dfh;
+	open $dfh, "<", $file
+		or die "Cannot read $file ($!@)";
+
+	while (<$dfh>)
+	{
+		# Ignore blank lines.
+		next if m@^\s*$@;
+
+		# Clean up the line and pull out the operation.
+		chomp;
+		
+		die "Cannot parse line $.: $_"
+			unless m@^(\#|\w+)\s+(.*?)$@;
+
+		my $line = $_;
+		my $operation = $1;
+		my $argument = $2;
+
+		# Figure out what to do based on the operation.
+		if ($operation eq "word")
+		{
+			$$dict{$argument} = 1;
+		}
+		elsif ($operation eq "command")
+		{
+			push @$cmds, $argument;
+			process_command($LOCAL_DIR, $argument);
+		}
+		elsif ($operation eq "#")
+		{
+			push @$cmts, $argument;
+		}
+		elsif ($operation eq "suggest")
+		{
+			die "Cannot parse line $.: Unknown suggestion: $line"
+				unless $argument =~ m@^(\w+)\s*=\s*(.*?)\s*$@;
+			my @words = split(/,\s*/, $2);
+			$$suggests{$1} = \@words;
+		}
+		elsif ($operation eq "replace")
+		{
+			die "Cannot parse line $.: Unknown replacement: $line"
+				unless $argument =~ m@^(\w+) = (.*?)$@;
+			$$replaces{$1} = $2;
+		}
+	}
+
+	close $dfh;
+}
+
+sub save_dictionary
+{
+	# If we don't have a dictionary, skip it.
+	return unless defined $LOCAL_DIR;
+
+	# Figure out the filename.
+	my $local_dict = "$LOCAL_DIR/local.words";
+
+	# Write out the dictionary file.
+	my $dfh;
+	open $dfh, ">", $local_dict
+		or die "Cannot write $local_dict ($!@)";
+
+	# Start with comments.
+	if (@comments)
+	{
+		print $dfh "# ", join("\n# ", @comments), "\n\n";
+	}
+
+	# Add in the directives.
+	if (@directives)
+	{
+		print $dfh "command ", join("\n@ ", @directives), "\n\n";
+	}
+
+	# Add in the suggestions.
+	if (%suggestions)
+	{
+		foreach my $s (sort keys %suggestions)
+		{
+			my $sw = join(", ", @{$suggestions{$s}});
+			print $dfh "suggest $s = $sw\n";
+		}
+
+		print $dfh "\n";
+	}
+
+	# Write out the replacements.
+	if (%replacements)
+	{
+		foreach my $s (sort keys %replacements)
+		{
+			my $sw = $replacements{$s};
+			print $dfh "replace $s = $sw\n";
+		}
+
+		print $dfh "\n";
+	}
+
+	# Write out the words in the dictionary.
+	foreach my $key (sort keys %dictionary)
+	{
+		print $dfh "word    $key\n";
+	}
+
+	# Finish up the dictionary.
+	close $dfh;
+}
+
+#
+# Commands
+#
+
+sub process_command
+{
+	# Parse the command.
+	my ($dict, $line) = @_;
+	
+	die "Cannot parse command: $line"
+		unless $line =~ m@^(\w+)\s*(.*?)$@;
+
+	my $command = $1;
+	my $argument = $2;
+
+	# Figure out the operation.
+	if ($command eq "include")
+	{
+		# Figure out the relative path.
+		die "Cannot parse include: $argument"
+			unless $argument =~ m@\"(.*?)\"@;
+
+		my $rel_filename = $1;
+		my $dict_file = abs_path("$dict/$1");
+		my $dict_dir = dirname($dict_file);
+
+		log_line("include $rel_filename");
+		log_line("  dict_file $dict_file");
+		log_line("  dict_dir $dict_dir");
+
+		# Load the file, stripping off directives and comments.
+		my @directives_ignore = ();
+		my @comments_ignore = ();
+
+		load_dictionary_file(
+			$dict_dir,
+			$dict_file,
+			\%dictionary_include,
+			\@directives_ignore,
+			\@comments_ignore,
+			\%suggestions_include,
+			\%replacements_include);
+		die "Nope $dict_file" unless scalar(keys(%suggestions_include)) > 0;
+	}
+	else
+	{
+		die "Unknown command: $command";
+	}
+}
+
+#
+# Suggestions
+#
+
+sub check_word
+{
+	# Check to see if it is a known word first in either the
+	# dictionary or the dictionary_include dictionaries.
+	my $search = shift @_;
+	my $lc_search = lc($search);
+	
+	if (exists $dictionary{$search} ||
+		exists $dictionary{$lc_search} ||
+		exists $dictionary_include{$search} ||
+		exists $dictionary_include{$lc_search})
+	{
+		log_line("Found: $search");
+		return 1;
+	}
+
+	return 0;
+}
+
+sub	check_suggestion
+{
+	my $search = shift @_;
+	my $lc_search = lc($search);
+
+	# Check to see if we have a suggestion for this one.
+	if (check_suggestions($search, $search, \%suggestions) ||
+		check_suggestions($search, $lc_search, \%suggestions) ||
+		check_suggestions($search, $search, \%suggestions_include) ||
+		check_suggestions($search, $lc_search, \%suggestions_include))
+	{
+		# This already wrote it out.
+		return 1;
+	}
+
+	# Otherwise, we don't know about it.
+	return 0;
+}
+
+sub check_suggestions
+{
+	my ($original, $search, $ref) = @_;
+
+	if (exists $$ref{$search})
+	{
+		my $suggestion_ref = $$ref{$search};
+		my @suggestion = @$suggestion_ref;
+		my $count = scalar(@suggestion);
+
+		print "& $original $count 1: " . join(", ", @suggestion), "\n\n";
+		return 1;
+	}
+
+	return 0;
+}
+
+#
+# Emacs
+#
+
+sub write_emacs_abbrev
+{
+	# Write out an emacs abbreviation file in the same directory.
+	open EMACS, ">", "$LOCAL_DIR/abbrev.el"
+		or die "Cannot write $LOCAL_DIR/abbrev.el ($!)";
+
+	# Write out the header.
+	print EMACS "(define-abbrev-table 'text-mode-abbrev-table\n";
+	print EMACS "  '(\n";
+
+	# Write out all the replacements.
+	foreach my $key (sort keys %replacements)
+	{
+		my $value = $replacements{$key};
+		print EMACS "    (\"$key\" \"$value\")\n";
+	}
+
+	foreach my $key (sort keys %replacements_include)
+	{
+		my $value = $replacements_include{$key};
+		print EMACS "    (\"$key\" \"$value\")\n";
+	}
+
+	# Finish up the file.
+	print EMACS "    ))\n";
+	close EMACS;
+}
+
+#
+# Logging
+#
+
+sub log_line
+{
+	my $message = join(" ", @_);
+	chomp($message);
+
+	# Log to the console.
+	print STDERR "LOG: $message\n"
+		if $LOG_CONSOLE;
+
+	# Log to the file, if requested.
+	if (defined $LOG_FILE)
+	{
+		open LOG, ">>", $LOG_FILE
+			or die "Cannot write $LOG_FILE ($!)";
+		print LOG "$message\n";
+		close LOG;
+	}
+}
