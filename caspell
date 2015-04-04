@@ -269,14 +269,14 @@ sub load_dictionary_file
 		elsif ($operation eq "suggest")
 		{
 			die "Cannot parse line $.: Unknown suggestion: $line"
-				unless $argument =~ m@^(\w+)\s*=\s*(.*?)\s*$@;
+				unless $argument =~ m@^([^\s\=]+)\s*=\s*(.*?)\s*$@;
 			my @words = split(/,\s*/, $2);
 			$$suggests{$1} = \@words;
 		}
 		elsif ($operation eq "replace")
 		{
 			die "Cannot parse line $.: Unknown replacement: $line"
-				unless $argument =~ m@^(\w+) = (.*?)$@;
+				unless $argument =~ m@^([^\s\=]+) = (.*?)$@;
 			$$replaces{$1} = $2;
 		}
 	}
