@@ -547,7 +547,7 @@ sub get_suggestions
 sub write_emacs_abbrev
 {
 	# Write out an emacs abbreviation file in the same directory.
-	open EMACS, ">", "$LOCAL_DIR/abbrev.el"
+	open EMACS, ">:encoding(utf8)", "$LOCAL_DIR/abbrev.el"
 		or die "Cannot write $LOCAL_DIR/abbrev.el ($!)";
 
 	# Write out the header.
