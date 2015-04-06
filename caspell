@@ -7,12 +7,11 @@
 # Directives
 use strict;
 use warnings;
-use open qw/:std :utf8/;
 use utf8;
 
 # Modules
-use File::Basename;
 use Cwd qw(abs_path);
+use File::Basename;
 use Getopt::Long;
 use IO::Handle;
 use IO::Pty;
@@ -25,7 +24,7 @@ Getopt::Long::Configure("pass_through");
 my $ASPELL = "/usr/bin/aspell";
 my $LOCAL_DIR;
 my $LOG_CONSOLE = 0;
-my $LOG_FILE = "/tmp/caspell.log";
+my $LOG_FILE;
 my $REWRITE = 0;
 my $EMACS = 0;
 my $IS_LOADED = 0;
@@ -33,8 +32,8 @@ my $IS_LOADED = 0;
 &GetOptions(
 	"--rewrite!" => \$REWRITE,
 	"--emacs!" => \$EMACS,
-	"--verbose-console!" => \$LOG_CONSOLE,
-	"--verbose-file=s" => \$LOG_FILE,
+	"--verbose!" => \$LOG_CONSOLE,
+	"--log=s" => \$LOG_FILE,
 	# We grab these here to strip it off the aspell's command line.
 	"-p=s" => \$LOCAL_DIR);
 
@@ -53,23 +52,12 @@ my %suggestions_include = ();
 # Command Line
 #
 
-# Check to see if we have a rewrite option.
-if ($REWRITE)
-{
-	load_dictionary();
-	save_dictionary();
-}
+# Check to see if we have a rewrite or generation option.
+load_dictionary();
+save_dictionary() if $REWRITE;
+write_emacs_abbrev() if $EMACS;
 
-if ($EMACS)
-{
-	load_dictionary();
-	write_emacs_abbrev();
-}
-
-if ($REWRITE || $EMACS)
-{
-	exit 0;
-}
+exit 0 if $REWRITE || $EMACS;
 
 # Automatically flush the output.
 $|++;
@@ -82,7 +70,6 @@ if (defined $a_index)
 	# Load the dictionary into memory. We have "auto-revert" just to
 	# make it easier to debug.
 	log_line("Pipe: ", join(" ", @ARGV));
-	load_dictionary();
 
 	# We may need to modify the arguments to `aspell`.
 	my @aspell_commands = @ARGV;
@@ -234,6 +221,8 @@ sub load_dictionary_file
 {
 	# Pull out the arguments.
 	my ($dir, $file, $dict, $cmds, $cmts, $suggests, $replaces) = @_;
+	my ($command_count, $word_count, $suggest_count, $replace_count) =
+		(0, 0, 0, 0);
 
 	# Figure out the filename. If we don't have it, we don't have
 	# anything to do.
@@ -243,6 +232,7 @@ sub load_dictionary_file
 
 	# Load the dictionary into memory.
 	my $dfh;
+
 	open $dfh, "<", $file
 		or die "Cannot read $file ($!@)";
 
@@ -265,11 +255,13 @@ sub load_dictionary_file
 		if ($operation eq "word")
 		{
 			$$dict{$argument} = 1;
+			$word_count++;
 		}
 		elsif ($operation eq "command")
 		{
 			push @$cmds, $argument;
 			process_command($LOCAL_DIR, $argument);
+			$command_count++;
 		}
 		elsif ($operation eq "#")
 		{
@@ -281,16 +273,28 @@ sub load_dictionary_file
 				unless $argument =~ m@^([^\s\=]+)\s*=\s*(.*?)\s*$@;
 			my @words = split(/,\s*/, $2);
 			$$suggests{$1} = \@words;
+			$suggest_count++;
 		}
 		elsif ($operation eq "replace")
 		{
 			die "Cannot parse line $.: Unknown replacement: $line"
 				unless $argument =~ m@^([^\s\=]+) = (.*?)$@;
 			$$replaces{$1} = $2;
+			$replace_count++;
 		}
 	}
 
+	# Close the handle.
 	close $dfh;
+
+	# Write out information.
+	log_line(
+		sprintf(
+			"$file: %d commands, %d words, %d suggests, %d replaces",
+			$command_count,
+			$word_count,
+			$suggest_count,
+			$replace_count));
 }
 
 sub save_dictionary
@@ -378,10 +382,6 @@ sub process_command
 		my $dict_file = abs_path("$dict/$1");
 		my $dict_dir = dirname($dict_file);
 
-		log_line("include $rel_filename");
-		log_line("  dict_file $dict_file");
-		log_line("  dict_dir $dict_dir");
-
 		# Load the file, stripping off directives and comments.
 		my @directives_ignore = ();
 		my @comments_ignore = ();
@@ -395,6 +395,20 @@ sub process_command
 			\%suggestions_include,
 			\%replacements_include);
 		die "Nope $dict_file" unless scalar(keys(%suggestions_include)) > 0;
+	}
+	elsif ($command eq "log")
+	{
+		# Figure out the relative path.
+		die "Cannot parse log: $argument"
+			unless $argument =~ m@\"(.*?)\"@;
+
+		my $rel_filename = $1;
+		my $log_file = abs_path("$dict/$1");
+
+		# Change the log file.
+		$LOG_FILE = $log_file;
+
+		log_line("Log: $log_file");
 	}
 	else
 	{
@@ -412,11 +426,16 @@ sub check_word
 	# dictionary or the dictionary_include dictionaries.
 	my $search = shift @_;
 	my $lc_search = lc($search);
+
+	# Search the dictionary.
+	my $s_d = exists $dictionary{$search};
+	my $l_d = exists $dictionary{$lc_search};
+	my $s_i = exists $dictionary_include{$search};
+	my $l_i = exists $dictionary_include{$lc_search};
+
+	log_line("Check $search/$lc_search $s_d $l_d $s_i $l_i");
 	
-	if (exists $dictionary{$search} ||
-		exists $dictionary{$lc_search} ||
-		exists $dictionary_include{$search} ||
-		exists $dictionary_include{$lc_search})
+	if ($s_d || $l_d || $s_i || $l_i)
 	{
 		log_line("Found: $search");
 		return 1;
@@ -509,7 +528,7 @@ sub log_line
 	# Log to the file, if requested.
 	if (defined $LOG_FILE)
 	{
-		open LOG, ">>:encoding(utf8)", $LOG_FILE
+		open LOG, ">>", $LOG_FILE
 			or die "Cannot write $LOG_FILE ($!)";
 		print LOG "$message\n";
 		close LOG;
