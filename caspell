@@ -7,6 +7,8 @@
 # Directives
 use strict;
 use warnings;
+use open qw/:std :utf8/;
+use utf8;
 
 # Modules
 use File::Basename;
@@ -33,7 +35,7 @@ my $IS_LOADED = 0;
 	"--emacs!" => \$EMACS,
 	"--verbose-console!" => \$LOG_CONSOLE,
 	"--verbose-file=s" => \$LOG_FILE,
-	# We grab -p here to strip it off the aspell's command line.
+	# We grab these here to strip it off the aspell's command line.
 	"-p=s" => \$LOCAL_DIR);
 
 # Dictionary
@@ -79,14 +81,20 @@ if (defined $a_index)
 {
 	# Load the dictionary into memory. We have "auto-revert" just to
 	# make it easier to debug.
-	log_line("-*- auto-revert -*-");
+	log_line("Pipe: ", join(" ", @ARGV));
 	load_dictionary();
+
+	# We may need to modify the arguments to `aspell`.
+	my @aspell_commands = @ARGV;
 
 	# Create the bidirectional pipe to `aspell`.
 	my $reader = new IO::Pty;
 	my $writer = new IO::Pty;
 
-	my $pid = open2($reader, $writer, "$ASPELL " . join(" ", @ARGV));
+	my $pid = open2(
+		$reader,
+		$writer,
+		"$ASPELL " . join(" ", @aspell_commands));
 
 	# Make sure whatever we write, we flush out.
 	$writer->autoflush(1);
@@ -193,6 +201,7 @@ if (defined $a_index)
 }
 
 # For everything else, just pass it on.
+log_line("Pass: ", join(" ", @ARGV));
 system($ASPELL, @ARGV);
 my $return_code = $? >> 8;
 exit $return_code;
@@ -500,7 +509,7 @@ sub log_line
 	# Log to the file, if requested.
 	if (defined $LOG_FILE)
 	{
-		open LOG, ">>", $LOG_FILE
+		open LOG, ">>:encoding(utf8)", $LOG_FILE
 			or die "Cannot write $LOG_FILE ($!)";
 		print LOG "$message\n";
 		close LOG;
