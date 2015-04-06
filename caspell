@@ -8,9 +8,15 @@
 use strict;
 use warnings;
 use utf8;
+use feature 'unicode_strings';
+
+binmode(STDERR, ":utf8");
+binmode(STDOUT, ":utf8");
+binmode(STDIN, ":utf8");
 
 # Modules
 use Cwd qw(abs_path);
+use Encode qw(encode_utf8 decode_utf8);
 use File::Basename;
 use Getopt::Long;
 use IO::Handle;
@@ -47,6 +53,7 @@ my %replacements = ();
 my %replacements_include = ();
 my %suggestions = ();
 my %suggestions_include = ();
+my @suggestion_maps = ();
 
 #
 # Command Line
@@ -82,6 +89,9 @@ if (defined $a_index)
 		$reader,
 		$writer,
 		"$ASPELL " . join(" ", @aspell_commands));
+
+	binmode($reader, ":utf8");
+	binmode($writer, ":utf8");
 
 	# Make sure whatever we write, we flush out.
 	$writer->autoflush(1);
@@ -131,7 +141,7 @@ if (defined $a_index)
 		$writer->print("$input\n");
 
 		# Ignore the non-output lines.
-		next if $input =~ m/^[\@\!\-\%\#\*\&]/;
+		next if $input =~ m/^[\@\!\-\%\#\*\&\$]/;
 
 		# For everything else, just pass it over and parse the
 		# results. We have a blank line to indicate we are done
@@ -242,6 +252,8 @@ sub load_dictionary_file
 	open $dfh, "<", $file
 		or die "Cannot read $file ($!@)";
 
+	binmode($dfh, ":utf8");
+
 	while (<$dfh>)
 	{
 		# Ignore blank lines.
@@ -260,8 +272,34 @@ sub load_dictionary_file
 		# Figure out what to do based on the operation.
 		if ($operation eq "word")
 		{
+			# Add the word to the dictionary.
 			$$dict{$argument} = 1;
 			$word_count++;
+
+			# If we have suggestion map, process it.
+			if (@suggestion_maps)
+			{
+				my $suggest = $argument;
+
+				foreach my $map (@suggestion_maps)
+				{
+					eval('$suggest =~ ' . $map);
+				}
+
+				# If we are different, then add it.
+				if ($suggest ne $argument)
+				{
+					# Add this suggestion to the list.
+					unless (exists $$suggests{$suggest})
+					{
+						my @empty = ();
+						$$suggests{$suggest} = \@empty;
+					}
+					
+					log_line("Adding $argument to $suggest");
+					push @$suggests{$suggest}, $argument;
+				}
+			}
 		}
 		elsif ($operation eq "command")
 		{
@@ -372,7 +410,7 @@ sub process_command
 	my ($dict, $line) = @_;
 	
 	die "Cannot parse command: $line"
-		unless $line =~ m@^(\w+)\s*(.*?)$@;
+		unless $line =~ m@^((?:map )?\w+)\s*(.*?)$@;
 
 	my $command = $1;
 	my $argument = $2;
@@ -415,6 +453,11 @@ sub process_command
 		$LOG_FILE = $log_file;
 
 		log_line("Log: $log_file");
+	}
+	elsif ($command eq "map suggest")
+	{
+		push @suggestion_maps, $argument;
+		log_line("command map suggest $argument");
 	}
 	else
 	{
@@ -463,11 +506,18 @@ sub	check_suggestion
 	unshift @suggestions, get_suggestions($lc_search, \%suggestions);
 	unshift @suggestions, get_suggestions($search, \%suggestions);
 
+	# Remove any duplicates, starting at the beginning.
+	my %seen = ();
+	my @results = ();
+
+	map { unless (exists $seen{$_}) { $seen{$_} = 1; push @results, $_ } }
+	@suggestions;
+
 	# Write out the suggestions.
 	print("& $search "
-		  . scalar(@suggestions)
+		  . scalar(@results)
 		  . " $index: "
-		  . join(", ", @suggestions)
+		  . join(", ", @results)
 		  . "\n");
 
 	# Write out the results.
@@ -539,6 +589,7 @@ sub log_line
 	{
 		open LOG, ">>", $LOG_FILE
 			or die "Cannot write $LOG_FILE ($!)";
+		binmode(LOG, ":utf8");
 		print LOG "$message\n";
 		close LOG;
 	}
