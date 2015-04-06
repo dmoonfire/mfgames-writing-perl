@@ -289,15 +289,15 @@ sub load_dictionary_file
 				# If we are different, then add it.
 				if ($suggest ne $argument)
 				{
-					# Add this suggestion to the list.
-					unless (exists $$suggests{$suggest})
+					# We always add to the included list.
+					unless (exists $suggestions_include{$suggest})
 					{
 						my @empty = ();
-						$$suggests{$suggest} = \@empty;
+						$suggestions_include{$suggest} = \@empty;
 					}
 					
 					log_line("Adding $argument to $suggest");
-					push @$suggests{$suggest}, $argument;
+					push $suggestions_include{$suggest}, $argument;
 				}
 			}
 		}
@@ -354,6 +354,8 @@ sub save_dictionary
 	open $dfh, ">", $local_dict
 		or die "Cannot write $local_dict ($!@)";
 
+	binmode($dfh, ":utf8");
+
 	# Start with comments.
 	if (@comments)
 	{
@@ -363,7 +365,7 @@ sub save_dictionary
 	# Add in the directives.
 	if (@directives)
 	{
-		print $dfh "command ", join("\n@ ", @directives), "\n\n";
+		print $dfh "command ", join("\ncommand ", @directives), "\n\n";
 	}
 
 	# Add in the suggestions.
@@ -438,7 +440,6 @@ sub process_command
 			\@comments_ignore,
 			\%suggestions_include,
 			\%replacements_include);
-		die "Nope $dict_file" unless scalar(keys(%suggestions_include)) > 0;
 	}
 	elsif ($command eq "log")
 	{
