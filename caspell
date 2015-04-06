@@ -150,18 +150,24 @@ if (defined $a_index)
 			$got = $reader->getline;
 
 			# See if we are processing a suggestion.
-			if ($got =~ m@^\& (.*?) @s)
+			if ($got =~ m@^\& (.*?) (\d+) (\d+): (.*?)$@s)
 			{
 				# See if we know about the word.
 				my $search = $1;
+				my $number = $2;
+				my $index = $3;
+				my $suggestions = $4;
+				my @suggestions = split(/, /, $suggestions);
 
+				# Check to see if this is a valid word.
 				if (check_word($search))
 				{
 					# This is a valid word, so skip it.
 					next;
 				}
 
-				if (check_suggestion($search))
+				# Get some additional suggestions.
+				if (check_suggestion($search, $number, $index, \@suggestions))
 				{
 					$sent_response = 1;
 					next;
@@ -446,38 +452,41 @@ sub check_word
 
 sub	check_suggestion
 {
-	my $search = shift @_;
+	# Pull out the parameters.
+	my ($search, $number, $index, $suggestions) = @_;
 	my $lc_search = lc($search);
 
 	# Check to see if we have a suggestion for this one.
-	if (check_suggestions($search, $search, \%suggestions) ||
-		check_suggestions($search, $lc_search, \%suggestions) ||
-		check_suggestions($search, $search, \%suggestions_include) ||
-		check_suggestions($search, $lc_search, \%suggestions_include))
-	{
-		# This already wrote it out.
-		return 1;
-	}
+	my @suggestions = @$suggestions;
+	unshift @suggestions, get_suggestions($lc_search, \%suggestions_include);
+	unshift @suggestions, get_suggestions($search, \%suggestions_include);
+	unshift @suggestions, get_suggestions($lc_search, \%suggestions);
+	unshift @suggestions, get_suggestions($search, \%suggestions);
 
-	# Otherwise, we don't know about it.
-	return 0;
+	# Write out the suggestions.
+	print("& $search "
+		  . scalar(@suggestions)
+		  . " $index: "
+		  . join(", ", @suggestions)
+		  . "\n");
+
+	# Write out the results.
+	return 1;
 }
 
-sub check_suggestions
+sub get_suggestions
 {
-	my ($original, $search, $ref) = @_;
+	my ($search, $ref) = @_;
 
 	if (exists $$ref{$search})
 	{
 		my $suggestion_ref = $$ref{$search};
 		my @suggestion = @$suggestion_ref;
-		my $count = scalar(@suggestion);
-
-		print "& $original $count 1: " . join(", ", @suggestion), "\n\n";
-		return 1;
+		return @suggestion;
 	}
 
-	return 0;
+	# Return an empty list.
+	return ();
 }
 
 #
