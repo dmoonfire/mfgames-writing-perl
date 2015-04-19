@@ -1,0 +1,315 @@
+#!/usr/bin/perl
+
+# A specialized Markdown parser that goes through and expands various
+# links inside a list into the actual elements. This is aware of the
+# YAML header inside the included file which are then expanded into
+# the resulting document.
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Modules
+use Cwd;
+use Getopt::Long;
+use YAML;
+use File::Basename qw(dirname);
+
+#
+# Options
+#
+
+my $OUTPUT = "-";
+my $VERBOSE = 0;
+my $STRIP_LIST_SECTIONS = 0;
+
+&GetOptions(
+	"verbose|v!" => \$VERBOSE,
+	"output|o=s" => \$OUTPUT,
+	"strip!" => \$STRIP_LIST_SECTIONS,
+	);
+
+#
+# Constants
+#
+
+my $ATX_HEADER_REGEX = '\s{0,3}(\#+)\s*(.*)(?:\s*\{(.*?)\}\s*)?$';
+
+#
+# Processing
+#
+
+# Figure out the filename.
+my $file = $ARGV[0];
+my $abs_path = Cwd::abs_path($file);
+my $dir_path = dirname($abs_path);
+
+# We load the entire file into memory because we'll be manipulating
+# lists when we encounter specialized sections.
+my @lines = ();
+
+open FILE, "<:encoding(utf8)", $file
+	or die "Cannot read $file ($!)";
+
+while (<FILE>)
+{
+	chomp;
+	push @lines, $_;
+}
+
+close FILE;
+
+#
+# YAML Processing
+#
+
+my $yaml = read_yaml(\@lines);
+
+#
+# Line Processing
+#
+
+# Create a new list of the lines, expanding various elements as we go.
+my @new_lines = ();
+my $section_attrs = "";
+
+while (@lines)
+{
+	# Grab the next line.
+	my $line = shift @lines;
+	#print STDERR "#: $line\n";
+
+	# See if we have a header.
+	if ($line =~ m@$ATX_HEADER_REGEX@)
+	{
+		# We have an ATX header.
+		my $atx_header = $1;
+		my $header_title = $2;
+		my $attrs = defined $3 ? $3 : "";
+
+		# Check to see if we have additional attributes.
+		my $add_attrs = 0;
+
+		if (lc($header_title) eq 'appendixes')
+		{
+			$section_attrs = ".backmatter";
+			$attrs .= ".appendix $attrs";
+			$add_attrs++;
+		}
+
+		if ($section_attrs ne "")
+		{
+			$attrs = "$section_attrs $attrs";
+			$add_attrs++;
+		}
+
+		# Check to see if we only have blank lines or list items until
+		# the next header. And that resulting header is the same level
+		# or higher.
+		my ($found, $links, $count) = check_list_section(\@lines, 0);
+		
+		if ($found)
+		{
+			# We are in a list section.
+			print STDERR "Found list section: $header_title ($atx_header) {$attrs}\n"
+				if $VERBOSE;
+
+			# Remove the lines for the section.
+			splice(@lines, 0, $count);
+			
+			# If we aren't stripping, add this line.
+			unless ($STRIP_LIST_SECTIONS)
+			{
+				push @new_lines, $line;
+				$atx_header .= "#";
+			}
+			
+			# Insert all the sections.
+			foreach my $link (@$links)
+			{
+				# Insert the file.
+				print STDERR "  $link\n" if $VERBOSE;
+				
+				push @new_lines, insert_file(
+					$dir_path, $link, $atx_header, $attrs);
+			}
+			
+			# Finish up.
+			next;
+		}
+		else
+		{
+			# Write out the header with the potential new attributes.
+			if ($add_attrs)
+			{
+				# Clean up the attributes.
+				$attrs =~ s/\s+/ /g;
+				$attrs =~ s/^\s+//;
+				$attrs =~ s/\s+$//;
+
+				# Build up the line.
+				my $line_attrs = $attrs eq "" ? "" : " {$attrs}";
+
+				$line = "$atx_header $header_title$line_attrs";
+			}
+		}
+	}
+
+	# Simply add the line to the new list.
+	push @new_lines, $line;
+}
+
+#
+# Write out the resulting lines.
+#
+
+# Figure out where we're writing.
+my $out;
+
+if ($OUTPUT ne "-")
+{
+	# Write out the handle.
+	open $out, ">:encoding(utf8)", $OUTPUT
+		or die "Cannot write $out ($!)";
+}
+else
+{
+	open($out, '>&', \*STDOUT)
+}
+
+# Write out the header.
+if (defined $yaml)
+{
+	print $out Dump($yaml);
+	print $out "---\n";
+}
+
+# Write out the lines.
+foreach my $line (@new_lines)
+{
+	print $out "$line\n";
+}
+
+# Close the file, if we opened it.
+close $out if $OUTPUT ne "-";
+
+#
+# YAML
+#
+
+sub read_yaml
+{
+	my $lines = shift @_;
+	my $yaml = undef;
+
+	if ($$lines[0] =~ m@^---@)
+	{
+		# Pull out the YAML header from the lines.
+		my @yaml = shift @$lines;
+		push @yaml, shift @$lines while $$lines[0] ne "---";
+		push @yaml, shift @$lines;
+		
+		# Combine everything together.
+		my $yaml_buffer = join("\n", @yaml) . "\n";
+		$yaml_buffer =~ s@\t@    @sg;
+		
+		# Parse the YAML header.
+		($yaml, my $ignore) = Load($yaml_buffer);
+	}
+
+	return $yaml;
+}
+
+#
+# Section Parsing
+#
+
+sub check_list_section
+{
+	# Grab the parameters.
+	my ($lines, $index) = @_;
+
+	# Go through the lines until we find a section.
+	my @links = ();
+
+	for (; $index < @$lines; $index++)
+	{
+		# If we have a header, we're done.
+		my $line = $$lines[$index];
+
+		if ($line =~ m@$ATX_HEADER_REGEX@)
+		{
+			last;
+		}
+
+		# If we have a blank line, then skip it.
+		next if $line =~ /^\s*$/;
+
+		# If we have a bullet or numbered list with a link, add it to
+		# the list.
+		if ($line =~ m@^\s*(\d+\.|[\*\-])\s+\[.*?\]\((.*?)\)@)
+		{
+			my $link = $2;
+			push @links, $link;
+			next;
+		}
+
+		# Unknown line, so break out.
+		return 0;
+	}
+
+	# If we break out, we are a list section.
+	return (1, \@links, $index);
+}
+
+#
+# Inserting
+#
+
+sub insert_file
+{
+	# Pull out the variables.
+	my ($dir, $file, $atx, $class) = @_;
+
+	# Figure out the path of the file.
+	my $path = Cwd::abs_path($file);
+
+	# Load in this file.
+	my $fh;
+	my @lines = ();
+
+	open $fh, "<:encoding(utf8)", $path
+		or die "Cannot read $path ($!)";
+
+	while (<$fh>)
+	{
+		chomp;
+		push @lines, $_;
+	}
+	
+	close $fh;
+
+	# Read in the header.
+	my $yaml = read_yaml(\@lines);
+
+	# Normalize the class.
+	$class =~ s@^\s+@@ if defined $class;
+	$class =~ s@\s+$@@ if defined $class;
+	$class =~ s@\s+@ @ if defined $class;
+	$class = defined $class && $class ne "" ? " {$class}" : "";
+
+	# Figure out the header. We have to have a blank line before the
+	# header because of Pandoc's limtiations.
+	my @inserted = ("");
+
+	push @inserted, "$atx " . $$yaml{title} . "$class";
+	push @inserted, @lines;
+	push @inserted, "";
+
+	# Return the resulting lines.
+	return @inserted;
+}

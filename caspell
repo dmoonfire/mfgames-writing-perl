@@ -34,6 +34,7 @@ my $LOG_FILE;
 my $REWRITE = 0;
 my $EMACS = 0;
 my $IS_LOADED = 0;
+my $REMOVE_DUPLICATES = 0;
 
 &GetOptions(
 	"--rewrite!" => \$REWRITE,
@@ -220,6 +221,11 @@ sub load_dictionary
 	return if $IS_LOADED;
 	$IS_LOADED = 1;
 
+	# Load the home directory.
+	my $home_dict = $ENV{"HOME"} . "/.config/mfgames-writing-perl/local.words";
+	
+	include_dictionary_file($ENV{"HOME"}, $home_dict);
+	
 	# Load the dictionary file.
 	my $local_dict = "$LOCAL_DIR/local.words";
 
@@ -233,12 +239,36 @@ sub load_dictionary
 		\%replacements);
 }
 
+sub include_dictionary_file
+{
+	my ($dir, $dict) = @_;
+
+	my @directives_ignore = ();
+	my @comments_ignore = ();
+	
+	load_dictionary_file(
+		$dir,
+		$dict,
+		\%dictionary_include,
+		\@directives_ignore,
+		\@comments_ignore,
+		\%suggestions_include,
+		\%replacements_include);
+}
+
 sub load_dictionary_file
 {
 	# Pull out the arguments.
 	my ($dir, $file, $dict, $cmds, $cmts, $suggests, $replaces) = @_;
 	my ($command_count, $word_count, $suggest_count, $replace_count) =
 		(0, 0, 0, 0);
+
+	# Load the parent directory first.
+	my $parent_dir = dirname($dir);
+	my $parent_dict = "$parent_dir/local.words";
+
+	include_dictionary_file($parent_dir, $parent_dict)
+		unless $parent_dir eq "/" || $parent_dir eq ".";
 
 	# Figure out the filename. If we don't have it, we don't have
 	# anything to do.
@@ -272,6 +302,13 @@ sub load_dictionary_file
 		# Figure out what to do based on the operation.
 		if ($operation eq "word")
 		{
+			# See if we already have the word and we are removing duplicates.
+			if ($REMOVE_DUPLICATES && exists $dictionary_include{$argument})
+			{
+				log_line("duplicate word $argument");
+				next;
+			}
+
 			# Add the word to the dictionary.
 			$$dict{$argument} = 1;
 			$word_count++;
@@ -412,7 +449,7 @@ sub process_command
 	my ($dict, $line) = @_;
 	
 	die "Cannot parse command: $line"
-		unless $line =~ m@^((?:map )?\w+)\s*(.*?)$@;
+		unless $line =~ m@^((?:(?:map|remove) )?\w+)\s*(.*?)$@;
 
 	my $command = $1;
 	my $argument = $2;
@@ -428,18 +465,8 @@ sub process_command
 		my $dict_file = abs_path("$dict/$1");
 		my $dict_dir = dirname($dict_file);
 
-		# Load the file, stripping off directives and comments.
-		my @directives_ignore = ();
-		my @comments_ignore = ();
-
-		load_dictionary_file(
-			$dict_dir,
-			$dict_file,
-			\%dictionary_include,
-			\@directives_ignore,
-			\@comments_ignore,
-			\%suggestions_include,
-			\%replacements_include);
+		# Include the dictionary file.
+		include_dictionary_file($dict_dir, $dict_file);
 	}
 	elsif ($command eq "log")
 	{
@@ -459,6 +486,11 @@ sub process_command
 	{
 		push @suggestion_maps, $argument;
 		log_line("command map suggest $argument");
+	}
+	elsif ($command eq "remove duplicates")
+	{
+		$REMOVE_DUPLICATES = 1;
+		log_line("command remove duplicates");
 	}
 	else
 	{

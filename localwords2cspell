@@ -78,7 +78,7 @@ open DICT, ">", "local.words"
 # Write out the dictionary.
 foreach my $key (sort keys %dictionary)
 {
-	print DICT "* $key\n";
+	print DICT "word $key\n";
 }
 
 # Finish up the file.

@@ -1,0 +1,190 @@
+#!/usr/bin/perl
+
+# Extracts sections and elements from a Markdown, writing it out to a
+# given file.
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Modules
+use Cwd;
+use Getopt::Long;
+use YAML;
+use File::Basename qw(dirname);
+
+#
+# Options
+#
+
+my $OUTPUT = "-";
+my @CLASSES = ();
+my @IDS = ();
+my $INCLUDE_YAML = 0;
+my $NOT_OPERATION = 0;
+my $VERBOSE = 0;
+
+&GetOptions(
+	"output|o=s" => \$OUTPUT,
+	"class|c=s" => \@CLASSES,
+	"id|i=s" => \@IDS,
+	"yaml|y!" => \$INCLUDE_YAML,
+	"not|n!" => \$NOT_OPERATION,
+	"verbose|v!" => \$VERBOSE,
+	);
+
+#
+# Constants
+#
+
+my $ATX_HEADER_REGEX = '\s{0,3}(\#+)\s*(.*?)(?:\s*\{(.+?)\})?$';
+
+#
+# Processing
+#
+
+# Figure out where we're writing.
+my $out;
+
+if ($OUTPUT ne "-")
+{
+	# Write out the handle.
+	open $out, ">:encoding(utf8)", $OUTPUT
+		or die "Cannot write $out ($!)";
+}
+else
+{
+	open($out, '>&', \*STDOUT)
+}
+
+# We load the entire file into memory because it is easier to manipulate
+# things. And we're lazy.
+my @lines = ();
+my $file = $ARGV[0];
+die "Need a filename" unless defined $ARGV[0];
+my $abs_path = Cwd::abs_path($file);
+my $dir_path = dirname($abs_path);
+
+open FILE, "<:encoding(utf8)", $file
+	or die "Cannot read $file ($!)";
+
+while (<FILE>)
+{
+	chomp;
+	push @lines, $_;
+}
+
+close FILE;
+
+# YAML Processing
+my $yaml = read_yaml(\@lines);
+
+if ($INCLUDE_YAML)
+{
+	print $out Dump($yaml);
+	print $out "---\n";
+}
+
+# If we are writing is dependent on if we have a "not" operation.
+my $is_writing = $NOT_OPERATION;
+
+# Go through the lines and write it out.
+while (@lines)
+{
+	# Pull off the line.
+	my $line = shift @lines;
+
+	# See if we have an ATX header.
+	if ($line =~ m@$ATX_HEADER_REGEX@)
+	{
+		# Pull out the parameters.
+		my $depth = $1;
+		my $title = $2;
+		my $options = defined $3 ? $3 : "";
+		$options =~ s@\.@ \.@g;
+		$options =~ s@^\s+@@;
+
+		# Pull out the options, which are space-separated.
+		my @options = split(/\s+/, $options);
+		
+		my %ids = ();
+		my %classes = ();
+		map { $ids{$_} = 1 if $_ =~ s@^\#@@ } @options;
+		map { $classes{$_} = 1 if $_ =~ s@^\.@@ } @options;
+
+		# Report the line.
+		if ($VERBOSE)
+		{
+			print STDERR "$title\n";
+			print STDERR " Line:    $line\n";
+			print STDERR " Attrs:   $options\n"
+				if $options ne "";
+			print STDERR " Options: ", join(", ", sort @options), "\n"
+				if @options;
+			print STDERR " Ids:     ", join(", ", sort keys %ids), "\n"
+				if %ids;
+			print STDERR " Classes: ", join(", ", sort keys %classes), "\n"
+				if %classes;
+		}
+
+		# Figure out the ID of the title.
+		unless (%ids)
+		{
+			my $id = lc($title);
+			$id =~ s@\s+@-@sg;
+			$id =~ s@^\d+@@sg;
+			$id =~ s@^-@@sg;
+			$ids{$id} = 1;
+		}
+
+		# Figure out if this is the header we are looking for.
+		my $is_match = 0;
+
+		map { $is_match = 1 if exists $ids{$_} } @IDS;
+		map { $is_match = 1 if exists $classes{$_} } @CLASSES;
+
+		# If we are a match, then swap the writing.
+		if (($is_match && $is_writing == $NOT_OPERATION) ||
+			(!$is_match && $is_writing != $NOT_OPERATION))
+		{
+			$is_writing = !$is_writing;
+		}
+	}
+
+	# Write it out, if we are writing.
+	print $out $line, "\n" if $is_writing;
+}
+
+# Close the file, if we opened it.
+close $out if $OUTPUT ne "-";
+
+#
+# YAML
+#
+
+sub read_yaml
+{
+	my $lines = shift @_;
+	my $yaml = undef;
+
+	if ($$lines[0] =~ m@^---@)
+	{
+		# Pull out the YAML header from the lines.
+		my @yaml = shift @$lines;
+		push @yaml, shift @$lines while $$lines[0] ne "---";
+		push @yaml, shift @$lines;
+		
+		# Combine everything together.
+		my $yaml_buffer = join("\n", @yaml) . "\n";
+		$yaml_buffer =~ s@\t@    @sg;
+		
+		# Parse the YAML header.
+		($yaml, my $ignore) = Load($yaml_buffer);
+	}
+
+	return $yaml;
+}
