@@ -1,0 +1,567 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+use utf8;
+
+# Modules
+use Archive::Zip;
+use Cwd;
+use File::Basename;
+use Getopt::Long;
+use YAML;
+
+#
+# Parameters and Variables
+#
+
+# Variables
+my $VERBOSE = 0;
+my $OUTPUT = undef;
+my $INCLUDE = 0;
+my $DEBUG = 0;
+my $EPUB3 = 0;
+
+# Files
+my $COVER = undef;
+my $CSS = undef;
+my $EPUBCHECK = "epubcheck";
+my $MARKDOWN_EXTRACT = "markdown-extract";
+my $MARKDOWN_INCLUDE = "markdown-include";
+my $METADATA = undef;
+my $PANDOC = "pandoc";
+
+# Command-Line Options
+&GetOptions(
+	"cover|c=s" => \$COVER,
+	"css|s=s" => \$CSS,
+	"debug|d!" => \$DEBUG,
+	"epub3|3!" => \$EPUB3,
+	"include|i!" => \$INCLUDE,
+	"metadata|m=s" => \$METADATA,
+	"output|o=s" => \$OUTPUT,
+	"verbose|v!" => \$VERBOSE,
+	);
+
+# Validation
+die "Need at least one input file"
+	unless @ARGV > 0;
+die "Cannot use --out or -o with multiple files."
+	if defined $OUTPUT && @ARGV > 1;
+
+# UTF-8
+binmode(STDOUT, ":utf8");
+binmode(STDERR, ":utf8");
+
+#
+# Processing
+#
+
+# Variables
+my %chapter_ids = ();
+my $changed = 0;
+
+# Loop through the files from the command line.
+foreach my $filename (@ARGV)
+{
+	# Report what file we are working on.
+	print STDERR "$filename\n" if $VERBOSE;
+
+	# Figure out the output name.
+	my $output_filename = defined $OUTPUT
+		? $OUTPUT
+		: get_output_filename($filename);
+	print STDERR "  Output $output_filename\n" if $VERBOSE;
+
+	# Set up the temporary directory.
+	my $working = create_working_directory();
+
+	# Extract and normalize the Markdown.
+	print STDERR "  Expanding source file\n" if $VERBOSE;
+	execute(
+		"  ",
+		$MARKDOWN_INCLUDE,
+		"--output=$working/source.markdown",
+		"--strip",
+		$filename);
+
+	# Make sure the file exists.
+	die "Cannot find $working/source.markdown"
+		unless -f "$working/source.markdown";
+
+	# Copy in the source data.
+	system("cp", $COVER, "$working/cover.jpg")
+		if defined $COVER;
+	system("cp", $METADATA, "$working/metadata.xml")
+		if defined $METADATA;
+	system("cp", $CSS, "$working/epub.css")
+		if defined $CSS;
+	system("cp", dirname($0) . "/data/epub/epub.css", "$working/epub.css")
+		unless -f "$working/epub.css";
+
+	# Get the title and creator for this piece. We assume this is in
+	# the YAML header of the source file.
+	my ($title, $author) = get_metadata("$working/source.markdown");
+
+	# Generate the EPUB.
+	generate_epub($working);
+	arrange_epub("$working/combined.epub");
+
+	# Verify the results.
+	execute(" ", $EPUBCHECK, "$working/combined.epub");
+
+    # Copy the EPUB into the output filename.
+    system("cp", "$working/combined.epub", $output_filename);
+
+	# Clean up our working directory.
+	remove_working_directory($working)
+		unless $DEBUG;
+}
+
+print STDERR "Done.\n" if $VERBOSE;
+
+#
+# Metadata
+#
+
+sub get_metadata
+{
+	# Load the YAML into memory.
+	my $filename = shift @_;
+	my @lines = ();
+
+	open FILE, "<:encoding(utf8)", $filename;
+	push @lines, $_ while <FILE>;
+	close FILE;
+
+	my $buffer = join("", @lines);
+
+	# Strip off the header.
+	$buffer =~ s@^(---.*\n---\n).*$@$1@sg;
+	my ($yaml) = Load($buffer);
+
+	# Pull out the elements.
+	my $title = $$yaml{title};
+	my $author = $$yaml{creator};
+
+	print STDERR "title: $title\n" if $VERBOSE;
+	print STDERR "author: $author\n" if $VERBOSE;
+
+	return ($title, $author);
+}
+
+#
+# Arrange
+#
+
+sub arrange_epub
+{
+	# Get the variable.
+	my ($epub_filename) = @_;
+
+	# Open the EPUB as a ZIP archive.
+	my $zip = Archive::Zip->new();
+
+	die "Cannot read zip archive $epub_filename"
+		unless ($zip->read($epub_filename) == Archive::Zip::AZ_OK);
+
+	# Go through all the chapter files to see if we have any of the
+	# key files.
+	%chapter_ids = ();
+	$changed = 0;
+
+	# Handle the special cases.
+	my $contents = $zip->contents("nav.xhtml");
+	$changed += update_navigation(\$contents);
+	$zip->contents("nav.xhtml", $contents);
+
+	# Go through the rest of the entries.
+	print STDERR "Entries:\n" if $VERBOSE;
+
+	foreach my $memberName ($zip->memberNames())
+	{
+		# Normally, we only process XHTML files.
+		next unless $memberName =~ m@\.xhtml$@;
+		next if $memberName eq "nav.xhtml";
+		
+		# Grab the entire contents and look for an ID.
+		$contents = $zip->contents($memberName);
+		my $id = $contents =~ m@<div id=\"([^\"]+)\" class=\"section@s
+			? $1
+			: undef;
+		
+		next unless defined $id;
+		
+		# Save the chapter and ID for when we rearrange the `content.opf` file.
+		$chapter_ids{$id} = $memberName;
+		$chapter_ids{$id} =~ s@\.xhtml$@@;
+		
+		# We have special processing for some of these categories.
+		if ($id eq "legal")
+		{
+			update_legal(\$contents);
+			$changed = 1;
+		}
+		elsif ($id eq "dedication")
+		{
+			update_dedication(\$contents);
+			$changed = 1;
+		}
+		
+		# Update breaks.
+		$changed += update_breaks(\$contents);
+		
+		# Update the file.
+		$zip->contents($memberName, $contents);
+		
+		# Remove the chapters and appendixes section.
+		$zip->removeMember($memberName)
+			if $id eq "chapters" or $id eq "appendixes";
+		
+		# Report what we are processing.
+		print STDERR "Scanned $memberName ($id)\n" if $VERBOSE;
+	}
+	
+	# Parse the `content.opf` to see if we have a legal.
+	$contents = $zip->contents("content.opf");
+	$changed += update_opf(\$contents);
+	$zip->contents("content.opf", $contents);
+	
+	# Parse the `toc.ncx` and remove items.
+	$contents = $zip->contents("toc.ncx");
+	$changed += update_ncx(\$contents);
+	$zip->contents("toc.ncx", $contents);
+	
+	# If we changed, write it out.
+	$zip->overwrite() if $changed;
+}
+
+# Remove the legal and dedication entries.
+sub update_navigation
+{
+	# Grab the values.
+	my $ref = shift @_;
+
+	# Remove the links for the frontmatter.
+	foreach my $name (qw(Legal Dedication))
+	{
+		$$ref =~ s@
+      <li [^\>]+>\s*
+        <a [^>]+>\s*
+          <span>$name</span>\s*
+        </a>\s*
+      </li>\s*
+    @@sgx;
+	}
+
+	# Rename the title.
+	$$ref =~ s@(<h1 id="toc-title")>.*?<(/h1>)@$1>Table of Contents<$2@sg;
+
+	# Remove the chapters section.
+    $$ref =~ s@
+        <li\s+id="[^"]+">\s*
+          <a\s+href="\w+.xhtml">\s*
+            <span>Chapters</span>\s*
+          </a>\s*
+          <ol\s+class="toc">\s*
+          (.*?)\s*
+          </ol>\s*
+        </li>@$1@sgx;
+
+	# Change the appendix section.
+    $$ref =~ s@
+        <li\s+id="[^"]+">\s*
+          <a\s+href="\w+.xhtml">\s*
+            <span>Appendixes</span>\s*
+          </a>\s*
+          <ol\s+class="toc">\s*
+          (.*?)\s*
+          </ol>\s*
+        </li>(.*)$@</ol><ul class="toc">PLACEHOLDERSECONDHOLDER@sgx;
+	my $a_contents = $1;
+	my $b_contents = $2;
+	$a_contents =~ s@<ol @<ul @sg;
+	$a_contents =~ s@</ol>@</ul>@sg;
+	$b_contents =~ s@</ol>@</ul>@sg;
+	$$ref =~ s@PLACEHOLDER@$a_contents@sg;
+	$$ref =~ s@SECONDHOLDER@$b_contents@sg;
+
+	# Return if we've changed.
+	return 1;
+}
+
+# Remove the legal and dedication entries.
+sub update_ncx
+{
+	# Grab the values.
+	my $ref = shift @_;
+	my $changed = 0;
+
+	# Remove the links for the frontmatter.
+	foreach my $name (qw(Chapters Appendixes))
+	{
+		$$ref =~ s@
+    <navPoint\s+id="[^"]+"\s+playOrder="\d+">\s*
+      <navLabel>\s*
+        <text>$name</text>\s*
+      </navLabel>\s*
+      <content\s+src="ch\d+.xhtml"\s+/>\s*
+      (<navPoint.*?</navPoint>)\s*
+    </navPoint>@$1@sgx;
+	}
+
+	# Go through the lines and rebuild the play order.
+	my @lines = split(/\n/, $$ref);
+	my $playOrder = 1;
+
+	for (my $index = 0; $index < @lines; $index++)
+	{
+		if ($lines[$index] =~ s@playOrder="\d+"@playOrder="$playOrder"@)
+		{
+			$playOrder++;
+		}
+	}
+
+	$$ref = join("\n", @lines);
+
+	# Return if we've changed.
+	return $changed;
+}
+
+# Reorder elements
+sub update_opf
+{
+	# Pull out the values so we can process them.
+	my $ref = shift @_;
+	my $value = 0;
+
+	# Pull out the spine elements.
+	if ($$ref =~ s@(<spine\s+toc="ncx">\s*)
+                   (.*?)
+                   (\s*</spine>)@$1-PLACEHOLDER-$3@sx)
+	{
+		# We have spine elements, so reorder them.
+		my @items = split(/\n/, $2);
+
+		# Pull out the lines for the legal.
+		my @frontmatter = ();
+
+		push @frontmatter, extract_item(\@items, "idref", "legal");
+		push @frontmatter, extract_item(\@items, "idref", "dedication");
+
+		# Get rid of the chapters and appendixes.
+		extract_item(\@items, "idref", "chapters");
+		extract_item(\@items, "idref", "appendixes");
+
+		# Normalize the frontmatter lines.
+		for (my $fm_index = 0; $fm_index < @frontmatter; $fm_index++)
+		{
+			$frontmatter[$fm_index] =~ s@/>@linear="yes" />@;
+		}
+
+		# Insert the front matter in front of the nav.
+		my $nav_index = 0;
+		++$nav_index until $items[$nav_index] =~ m@idref="nav"@
+			|| $nav_index > $#items;
+
+		splice(@items, $nav_index, 0, @frontmatter);
+
+		# We are changing if we had frontmatter.
+		$value++ if @frontmatter;
+
+		# Put them back into the file.
+		my $items = join("\n", @items);
+		$$ref =~ s@-PLACEHOLDER-@$items@sg;
+	}
+
+	# Pull out the spine elements.
+	if ($$ref =~ s@(<manifest>\s*)
+                   (.*?)
+                   (\s*</manifest>)@$1-PLACEHOLDER-$3@sx)
+	{
+		# We have spine elements, so reorder them.
+		my @items = split(/\n/, $2);
+
+		# Get rid of the chapters and appendixes.
+		extract_item(\@items, "id", "chapters");
+		extract_item(\@items, "id", "appendixes");
+
+		# Put them back into the file.
+		my $items = join("\n", @items);
+		$$ref =~ s@-PLACEHOLDER-@$items@sg;
+	}
+
+	# Return if we made any changes.
+	return $value;
+}
+
+# Remove the header from the legal chapter. All paragraphs in the
+# legal section are blocked.
+sub update_legal
+{
+	my $ref = shift @_;
+	$$ref =~ s@<h1>.*?</h1>@@sg;
+	$$ref =~ s@<p>@<p class="block">@sg;
+}
+
+# Remove the header from the dedication chapter. Also, the dedication
+# is centered.
+sub update_dedication
+{
+	my $ref = shift @_;
+	$$ref =~ s@<h1>.*?</h1>@@sg;
+	$$ref =~ s@<p>@<p class="center">@sg;
+}
+
+# Remove the <hr/> elements and replace them with a more obvious break.
+sub update_breaks
+{
+	my $ref = shift @_;
+	my $changed = $$ref =~ s@<hr\s*/>@<p class="break"># # #</p>@sg;
+	return $changed;
+}
+
+#
+# Item Removal
+#
+
+sub get_array_index
+{
+	my ($items, $attr, $chapter) = @_;
+	my @items = @$items;
+	my $index = 0;
+	++$index until $items[$index] =~ m@$attr="$chapter"@
+		|| $index > $#items;
+	
+	$index = -1 if $index == $#items;
+
+	return $index;
+}
+
+sub extract_item
+{
+	my ($items, $attr, $id) = @_;
+	my @list = ();
+
+	if (exists $chapter_ids{$id})
+	{
+		my $chapter = $chapter_ids{$id};
+		my $index = get_array_index($items, $attr, $chapter);
+		
+		if ($index >= 0)
+		{
+			push @list, splice(@$items, $index, 1);
+		}
+	}
+
+	return @list;
+}
+
+#
+# Generation
+#
+
+sub generate_epub
+{
+	my ($working) = @_;
+
+	# Move into the build directory.
+	my $cwd = getcwd;
+	Cwd::chdir($working);
+
+	# Build the command.
+	my @arguments = (
+		$PANDOC,
+		"$working/source.markdown",
+		"-o", "$working/combined.epub",
+		"-t", $EPUB3 ? "epub3" : "epub",
+		"-s",
+		"--toc",
+		"--epub-chapter-level=2",
+		"--data-dir=$working",
+		"--smart",
+		"--normalize");
+	push @arguments, "--epub-cover-image=$working/cover.jpg"
+		if defined $COVER;
+	push @arguments, "--epub-metadata=$working/metadata.xml"
+		if defined $METADATA;
+	push @arguments, "--epub-stylesheet=$working/epub.css"
+		if -f "$working/epub.css";
+
+	# Run the command.
+	execute("  ", @arguments);
+
+	# Go back to the directory.
+	Cwd::chdir($cwd);
+}
+
+#
+# Naming
+#
+
+sub get_output_filename
+{
+	my $filename = shift @_;
+	my $dirname = dirname($filename);
+	my $basename = basename($filename, ".markdown");
+
+	return "$dirname/$basename.epub";
+}
+
+sub create_working_directory
+{
+	my $working = $DEBUG
+		? "/tmp/format-markdown-epub"
+		: "/tmp/format-markdown-epub-$$";
+
+	remove_working_directory($working);
+	system("mkdir", $working) unless -d $working;
+
+	print STDERR "  Created $working\n" if $VERBOSE;
+
+	return $working;
+}
+
+sub remove_working_directory
+{
+	my $working = shift @_;
+
+	if (-d $working)
+	{
+		if ($DEBUG)
+		{
+			foreach my $file (glob("$working/*"))
+			{
+				unlink($file);
+			}
+
+			print STDERR "  Removed $working contents\n" if $VERBOSE;
+		}
+		else
+		{
+			my $selector = $working;
+			system("rm", "-rf", $selector);
+			print STDERR "  Removed $selector\n" if $VERBOSE;
+		}
+	}
+}
+
+#
+# Running
+#
+
+sub execute
+{
+	my $prefix = shift @_;
+	print STDERR $prefix . "Running " . join(" ", @_) . "\n"
+		if $VERBOSE;
+	my $results = system(@_);
+	my $code = $results << 8;
+
+	die "There was an error running command" if $code != 0;
+}
