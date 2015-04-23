@@ -12,6 +12,7 @@ use utf8;
 # Modules
 use Archive::Zip;
 use Cwd;
+use Encode;
 use File::Basename;
 use Getopt::Long;
 use YAML;
@@ -21,11 +22,12 @@ use YAML;
 #
 
 # Variables
-my $VERBOSE = 0;
-my $OUTPUT = undef;
-my $INCLUDE = 0;
 my $DEBUG = 0;
+my $EPIGRAPHS = 0;
 my $EPUB3 = 0;
+my $INCLUDE = 0;
+my $OUTPUT = undef;
+my $VERBOSE = 0;
 
 # Files
 my $COVER = undef;
@@ -41,6 +43,7 @@ my $PANDOC = "pandoc";
 	"cover|c=s" => \$COVER,
 	"css|s=s" => \$CSS,
 	"debug|d!" => \$DEBUG,
+	"epigraphs!" => \$EPIGRAPHS,
 	"epub3|3!" => \$EPUB3,
 	"include|i!" => \$INCLUDE,
 	"metadata|m=s" => \$METADATA,
@@ -55,8 +58,8 @@ die "Cannot use --out or -o with multiple files."
 	if defined $OUTPUT && @ARGV > 1;
 
 # UTF-8
-binmode(STDOUT, ":utf8");
-binmode(STDERR, ":utf8");
+binmode(STDOUT, ":raw");
+binmode(STDERR, ":raw");
 
 #
 # Processing
@@ -149,8 +152,8 @@ sub get_metadata
 	my $title = $$yaml{title};
 	my $author = $$yaml{creator};
 
-	print STDERR "title: $title\n" if $VERBOSE;
-	print STDERR "author: $author\n" if $VERBOSE;
+	print STDERR "  title: $title\n" if $VERBOSE;
+	print STDERR "  author: $author\n" if $VERBOSE;
 
 	return ($title, $author);
 }
@@ -193,10 +196,15 @@ sub arrange_epub
 		$contents = $zip->contents($memberName);
 		my $id = $contents =~ m@<div id=\"([^\"]+)\" class=\"section@s
 			? $1
-			: undef;
+			: ($contents =~ m@<section id=\"([^\"]+)\" class=\"level1@s
+			   ? $1
+			   : undef);
 		
 		next unless defined $id;
 		
+		# Report what we are processing.
+		print STDERR "  $memberName ($id)\n" if $VERBOSE;
+
 		# Save the chapter and ID for when we rearrange the `content.opf` file.
 		$chapter_ids{$id} = $memberName;
 		$chapter_ids{$id} =~ s@\.xhtml$@@;
@@ -215,6 +223,7 @@ sub arrange_epub
 		
 		# Update breaks.
 		$changed += update_breaks(\$contents);
+		$changed += update_epigraphs(\$contents) if $EPIGRAPHS;
 		
 		# Update the file.
 		$zip->contents($memberName, $contents);
@@ -222,9 +231,6 @@ sub arrange_epub
 		# Remove the chapters and appendixes section.
 		$zip->removeMember($memberName)
 			if $id eq "chapters" or $id eq "appendixes";
-		
-		# Report what we are processing.
-		print STDERR "Scanned $memberName ($id)\n" if $VERBOSE;
 	}
 	
 	# Parse the `content.opf` to see if we have a legal.
@@ -422,7 +428,41 @@ sub update_dedication
 sub update_breaks
 {
 	my $ref = shift @_;
+	print STDERR "    Updating breaks\n" if $VERBOSE;
 	my $changed = $$ref =~ s@<hr\s*/>@<p class="break"># # #</p>@sg;
+	return $changed;
+}
+
+# Format blockquotes in the beginning to be epigraphs with separate
+# attributions.
+sub update_epigraphs
+{
+	# Get the text and keep track of changes.
+	my $ref = shift @_;
+	my $changed = 0;
+
+	print STDERR "    Updating epigraphs\n" if $VERBOSE;
+
+	# Loop through all of the epigraphs which are a blockquote right
+	# after a heading.
+	while ($$ref =~ s@</h1><blockquote>(.*?)</blockquote>@PLACEHOLDER@s)
+	{
+		# Process the contents.
+		my $contents = $1;
+		
+		$contents = decode_utf8($contents);
+
+		# Look for an attribution.
+		$contents =~ s@\s*—\s*(.*?)$@</p><p class="attribution">—$1@s;
+
+		# Put everything back.
+		$contents = encode_utf8($contents);
+
+		$$ref =~ s@PLACEHOLDER@</h1><blockquote class="epigraph">$contents</blockquote>@s;
+		$changed++;
+	}
+
+	# Return the changes.
 	return $changed;
 }
 

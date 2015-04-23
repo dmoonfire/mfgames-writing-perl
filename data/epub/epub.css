@@ -65,3 +65,17 @@ p {
 	text-align: center;
 	font-size: small;
 }
+
+/* Blockquotes, Epigraphs, and Attributions */
+.epigraph
+{
+	font-size: small;
+	padding-bottom: 1em;
+	padding-left: 2em;
+	padding-right: 2em;
+}
+
+.attribution
+{
+	text-align: right;
+}
