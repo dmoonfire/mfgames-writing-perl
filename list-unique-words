@@ -1,0 +1,74 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+#
+# Processing
+#
+
+# Keep track of all the unique words.
+my %seen = ();
+
+# Go through the files.
+while (@ARGV)
+{
+	my $file = shift @ARGV;
+	open my $in, '<', $file or die $!;
+	
+	while (<$in>) {
+		chomp;
+		s/,\s*$//;
+		map $seen{$_}++, split(/[\s\.\,\-\*\"\'\!…\?\(\);\/\:0-9\>\<]+/, $_);
+	}
+}
+
+# Read in all the words.
+my %words = (
+	"ll" => 1,
+	"doesn" => 1,
+	"aren" => 1,
+	"chested" => 1,
+	"couldn" => 1,
+	"handhold" => 1,
+	"hasn" => 1,
+	"spasmed" => 1,
+	"shallowly" => 1,
+	"sunbaked" => 1,
+	"alchemical" => 1,
+	"discretely" => 1,
+	"unlit" => 1,
+	"isn" => 1,
+	"nicker" => 1,
+	"rewrapped" => 1,
+	"didn" => 1,
+	);
+
+open WORDS, "</etc/dictionaries-common/words" or die "Cannot open words ($!)";
+
+while (<WORDS>)
+{
+	chomp;
+	my $t = lc($_);
+	#print STDERR "$t\n";
+	$words{$t} = 1;
+}
+
+close WORDS;
+
+# List all the words.
+foreach my $word (keys(%seen))
+{
+	my $search = lc($word);
+
+	next if defined $words{$search};
+
+	next unless $word =~ /^[A-Z]/;
+
+	print "$word\n";
+}

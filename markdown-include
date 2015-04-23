@@ -12,11 +12,13 @@
 # Directives
 use strict;
 use warnings;
+use utf8;
 
 # Modules
 use Cwd;
 use Getopt::Long;
 use YAML;
+use Data::Dumper;
 use File::Basename qw(dirname);
 
 #
@@ -38,6 +40,13 @@ my $STRIP_LIST_SECTIONS = 0;
 #
 
 my $ATX_HEADER_REGEX = '\s{0,3}(\#+)\s*(.*)(?:\s*\{(.*?)\}\s*)?$';
+
+#
+# UTF-8
+#
+
+binmode(STDOUT, ":raw");
+binmode(STDERR, ":raw");
 
 #
 # Processing
@@ -213,12 +222,20 @@ sub read_yaml
 		push @yaml, shift @$lines while $$lines[0] ne "---";
 		push @yaml, shift @$lines;
 		
-		# Combine everything together.
+		# Combine everything together. We also mask tabs into spaces
+		# because YAML doesn't allow for tabs but I'm not going to
+		# change my tab key to fit their conventions.
 		my $yaml_buffer = join("\n", @yaml) . "\n";
 		$yaml_buffer =~ s@\t@    @sg;
-		
+
 		# Parse the YAML header.
 		($yaml, my $ignore) = Load($yaml_buffer);
+
+		# Put the copyright back.
+		$$yaml{rights} =~ s@COPYRIGHT@©@sg if exists $$yaml{rights};
+
+		# If we can't find the title, we have a problem.
+		die "Cannot find title in file" unless exists $$yaml{title};
 	}
 
 	return $yaml;

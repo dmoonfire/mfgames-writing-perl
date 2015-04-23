@@ -1,0 +1,10 @@
+\makepagestyle{custompage}
+\makeevenhead{custompage}{{\scriptsize \thepage}}{{\scriptsize \thetitle}}{}
+\makeoddhead{custompage}{}{{\scriptsize \leftmark}}{{\scriptsize \thepage}}
+\makeevenfoot{custompage}{}{}{}
+\makeoddfoot{custompage}{}{}{}
+\makeevenhead{plain}{}{}{}
+\makeoddhead{plain}{}{}{}
+\makeevenfoot{plain}{}{}{}
+\makeoddfoot{plain}{}{{\scriptsize \thepage}}{}\pagestyle{custompage}
+\makeatletter

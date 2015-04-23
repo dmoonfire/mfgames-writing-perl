@@ -1,0 +1,709 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+use utf8;
+
+# Modules
+use Cwd;
+use File::Basename;
+use Getopt::Long;
+
+#
+# Parameters and Variables
+#
+
+# Variables
+my $VERBOSE = 0;
+my $OUTPUT = undef;
+my $INCLUDE = 0;
+my $DEBUG = 0;
+my @FORMATS = ();
+my @LIBRARIES = ();
+my $EPIGRAPHS = 0;
+my $LETTRINE = 0;
+my @MAINMATTER_FILTER = ();
+
+# Files
+my $MARKDOWN_INCLUDE = "markdown-include";
+my $MARKDOWN_EXTRACT = "markdown-extract";
+my $PANDOC = "pandoc";
+my $LATEXRUN = "latexrun";
+my $LATEX = "xelatex";
+
+# Command-Line Options
+&GetOptions(
+	"debug|d!" => \$DEBUG,
+	"epigraphs!" => \$EPIGRAPHS,
+	"format|f=s" => \@FORMATS,
+	"include|i!" => \$INCLUDE,
+	"lettrine!" => \$LETTRINE,
+	"library|L=s" => \@LIBRARIES,
+	"mainmatter-filter=s" => \@MAINMATTER_FILTER,
+	"output|o=s" => \$OUTPUT,
+	"verbose|v!" => \$VERBOSE,
+	);
+
+# Validation
+die "Need at least one input file"
+	unless @ARGV > 0;
+die "Cannot use --out or -o with multiple files."
+	if defined $OUTPUT && @ARGV > 1;
+
+# Turn formats into a dictionary.
+my @list = qw(common* project* structure*);
+map { push @list, split(/,/, $_) } @FORMATS;
+@FORMATS = ();
+map { s@\*@.*@; push @FORMATS, $_ } @list;
+
+# UTF-8
+binmode(STDOUT, ":utf8");
+binmode(STDERR, ":utf8");
+
+#
+# Processing
+#
+
+# Loop through the files from the command line.
+foreach my $filename (@ARGV)
+{
+	# Report what file we are working on.
+	print STDERR "$filename\n" if $VERBOSE;
+
+	# Figure out the output name.
+	my $output_filename = defined $OUTPUT
+		? $OUTPUT
+		: get_output_filename($filename);
+	print STDERR "  Output $output_filename\n" if $VERBOSE;
+
+	# Set up the temporary directory.
+	my $working = create_working_directory();
+
+	# Extract and normalize the Markdown.
+	print STDERR "  Expanding source file\n" if $VERBOSE;
+	execute(
+		"  ",
+		$MARKDOWN_INCLUDE,
+		"--output=$working/source.markdown",
+		"--strip",
+		$filename);
+
+	# Make sure the file exists.
+	die "Cannot find $working/source.markdown"
+		unless -f "$working/source.markdown";
+
+	# Extract the legal and dedication.
+	my $index = 26;
+
+	for my $id (qw(legal dedication acknowledgments))
+	{
+		my $has_section = extract_section($working, "id", $id);
+
+		if ($has_section)
+		{
+			# Add this section to the formats, in case we have
+			# additional logic.
+			my $section_output =
+				sprintf("%s/%02d-%s.tex", $working, $index, $id);
+
+			pandoc_section($working, $id, $index);
+
+			if ($id eq "acknowledgments")
+			{
+				unlist_chapter($section_output);
+			}
+			else
+			{
+				remove_chapter($section_output);
+				make_block($section_output);
+			}
+
+			$index += 5;
+
+			# Add the formats to the internal list.
+			push @FORMATS, "$id";
+			push @FORMATS, "$id*";
+		}
+	}
+
+	# Extract the backmatter.
+	my $has_backmatter = extract_section($working, "class", "backmatter");
+
+	if ($has_backmatter)
+	{
+		pandoc_section($working, "backmatter", 85);
+		unlist_chapter("$working/85-backmatter.tex");
+		push @FORMATS, "backmatter";
+		push @FORMATS, "backmatter*";
+	}
+
+	# Extract the main matter.
+	extract_mainmatter($working);
+	pandoc_section($working, "mainmatter", 51);
+	remove_labels("$working/51-mainmatter.tex");
+	filter_mainmatter($working, "51-mainmatter.tex", @MAINMATTER_FILTER);
+	format_epigraphs("$working/51-mainmatter.tex") if $EPIGRAPHS;
+	format_lettrine("$working/51-mainmatter.tex") if $LETTRINE;
+
+	# Go through and pull in the formats.
+	gather_formats($working);
+
+	# Combine everything together in numeric values.
+	combine_files($working);
+	generate_pdf($working);
+
+    # Copy the PDF into the output filename.
+    system("cp", "$working/combined.pdf", $output_filename);
+
+	# Clean up our working directory.
+	remove_working_directory($working)
+		unless $DEBUG;
+}
+
+print STDERR "Done.\n" if $VERBOSE;
+
+#
+# Generation
+#
+
+sub generate_pdf
+{
+	my ($working) = @_;
+
+	# Move into the build directory.
+	my $cwd = getcwd;
+	Cwd::chdir($working);
+
+	# Run the command.
+	my $cmd = "buf_size=2500000 $LATEXRUN -W no-microtype --latex-cmd $LATEX "
+		. "-o combined.pdf combined.tex";
+	$cmd .= " > /dev/null" unless $VERBOSE;
+	system($cmd);
+	system($cmd);
+
+	# Go back to the directory.
+	Cwd::chdir($cwd);
+}
+
+sub combine_files
+{
+	my ($working) = @_;
+
+	open OUT, ">:encoding(utf8)", "$working/combined.tex"
+		or die "Cannot write $working/combined.tex";
+
+	print STDERR "  Writing combined.tex\n" if $VERBOSE;
+	
+	foreach my $glob (glob("$working/??-*.tex"))
+	{
+		print STDERR "    Reading $glob\n" if $VERBOSE;
+		open IN, "<:encoding(utf8)", $glob
+			or die "Cannot read $glob ($!)";
+		print OUT $_ while <IN>;
+		close IN;
+	}
+
+	close OUT;
+}
+
+#
+# Formats
+#
+
+sub has_format
+{
+	my $id = shift;
+	my %formats = ();
+
+	map { $formats{$_} = 1 } @FORMATS;
+
+	my $found = defined $formats{$id};
+
+	return $found;
+}
+
+sub gather_formats
+{
+	# Get the working directory.
+	my $working = shift @_;
+
+	print STDERR "  Pulling in formats\n" if $VERBOSE;
+
+	# See if we have the debugging path.
+	my $script_dir = dirname($0);
+	my $script_data_dir = "$script_dir/data";
+	my $script_data_latex_dir = "$script_data_dir/latex";
+	
+	gather_formats_dir($working, $script_data_dir);
+	gather_formats_dir($working, $script_data_latex_dir);
+
+	# Grab the current directory.
+	my $cwd = getcwd;
+	my $cwd_etc = "$cwd/etc";
+	my $cwd_etc_latex = "$cwd_etc/latex";
+
+	gather_formats_dir($working, $cwd_etc);
+	gather_formats_dir($working, $cwd_etc_latex);
+
+	# Use the parameter if we have them.
+	foreach my $search (@LIBRARIES)
+	{
+		gather_formats_dir($working, $search);
+	}
+}
+
+sub gather_formats_dir
+{
+	# Pull in the parameters.
+	my ($working, $dir) = @_;
+	print STDERR "    Searching $dir\n" if $VERBOSE;
+	return unless -d $dir;
+
+	# Go through the files in this directory, which replaces any
+	# existing files later in the search path or generated already.
+	foreach my $file (glob("$dir/??-*.tex"))
+	{
+		# Grab the basename and figure out the format.
+		my $basename = basename($file);
+		
+		die "Cannot read format $basename"
+			unless $basename =~ m@^\d\d-(.*?)?\.tex$@;
+
+		my $format = $1;
+
+		# See if we have at least one file with this format.
+		my $has_format = 0;
+
+		foreach my $f (@FORMATS)
+		{
+			if ($format =~ m@$f@)
+			{
+				$has_format = 1;
+				last;
+			}
+		}
+
+		next unless $has_format;
+
+		# We haven't exclude it, so add it to the directory with
+		# headers and footers.
+		open INCLUDE, "<:encoding(utf8)", $file
+			or die "Cannot read $file ($!)";
+		open INCLUDE_OUT, ">:encoding(utf8)", "$working/$basename.tex"
+			or die "Cannot write $working/$basename.tex ($!)";
+
+		print INCLUDE_OUT "%% BEGIN $basename\n";
+		print INCLUDE_OUT $_ while <INCLUDE>;
+		print INCLUDE_OUT "%% END $basename\n";
+
+		close INCLUDE;
+		close INCLUDE_OUT;
+
+		print STDERR "      $basename\n" if $VERBOSE;
+	}
+}
+
+sub filter_mainmatter
+{
+	my $working = shift @_;
+	my $file = shift @_;
+	print STDERR "  Filters: " . join(", ", @_), "\n" if $VERBOSE;
+	my $filters = join(" | ", @_);
+	my $commands = "cat $working/$file | $filters > $working/filtered.tex";
+	system($commands);
+	system("mv", "$working/filtered.tex", "$working/$file");
+}
+
+sub format_epigraphs
+{
+	my ($chapter_file) = @_;
+
+	# Read in the file.
+	print STDERR "  Reading $chapter_file to format epigraphs\n"
+		if $VERBOSE;
+
+	open FILE, "<:encoding(utf8)", $chapter_file
+		or die "Cannot read $chapter_file ($!)";
+
+	my @lines = ();
+	my $chapter_begin = 0;
+	my $capture_quote = 0;
+	my @quote = ();
+
+	while (<FILE>)
+	{
+		if (m@\\chapter@)
+		{
+			$chapter_begin = 1;
+		}
+		elsif (m@^\s*$@) {}
+		elsif (m@\\end\{quote\}@ && $capture_quote)
+		{
+			# Clean up the epigraph.
+			my $epigraph = join("\n", @quote);
+			$epigraph = "\\epigraph{\\epigraphfont {$epigraph}}";
+			$epigraph =~ s@—\s*(.*?)\}\}@\}\}{\\epigraphattributionfont {—$1}}@sg;
+
+			# Add the epigraph to the lines.
+			push @lines, $epigraph;
+
+			# We are done with this quote.
+			$capture_quote = 0;
+			@quote = ();
+			next;
+		}
+		elsif ($capture_quote)
+		{
+			push @quote, $_;
+			next;
+		}
+		elsif (m@\\begin\{quote\}@ && $chapter_begin)
+		{
+			$capture_quote = 1;
+			next;
+		}
+		else
+		{
+			$chapter_begin = 0;
+		}
+
+		push @lines, $_;
+	}
+
+	close FILE;
+
+	# Write out the file.
+	open FILE, ">:encoding(utf8)", $chapter_file
+		or die "Cannot write $chapter_file ($!)";
+	print FILE join("", @lines);
+	close FILE;
+}
+
+sub format_lettrine
+{
+	my ($chapter_file) = @_;
+
+	# Read in the file, excluding the chapter.
+	print STDERR "  Reading $chapter_file to unlist chapter\n"
+		if $VERBOSE;
+
+	open FILE, "<:encoding(utf8)", $chapter_file
+		or die "Cannot read $chapter_file ($!)";
+
+	my @lines = ();
+	my $first_para = 0;
+
+	while (<FILE>)
+	{
+		if (m@\\chapter@ || m@\\epigraph@ || m@^\}@)
+		{
+			$first_para = 1;
+		}
+		elsif (m@^\s*$@) {}
+		elsif ($first_para)
+		{
+			# Grab the first word.
+			s@^([“]?)(\w)(.*?)\s+@\\lettrine[lhang=0,lraise=0.5,loversize=-0.25,lines=2,ante=$1]{$2}{$3} @
+				or die "Cannot parse $_";
+
+			# We aren't the first paragraph anymore.
+			$first_para = 0;
+		}
+
+		push @lines, $_;
+	}
+
+	close FILE;
+
+	# Write out the chapter.
+	open FILE, ">:encoding(utf8)", $chapter_file
+		or die "Cannot write $chapter_file ($!)";
+	print FILE join("", @lines);
+	close FILE;
+}
+
+sub remove_labels
+{
+	my ($chapter_file) = @_;
+
+	# Read in the file, excluding the chapter.
+	print STDERR "  Reading $chapter_file to remove labels\n"
+		if $VERBOSE;
+
+	open FILE, "<:encoding(utf8)", $chapter_file
+		or die "Cannot read $chapter_file ($!)";
+
+	my @lines = ();
+	my $first_para = 0;
+
+	while (<FILE>)
+	{
+		s@\\label.*$@@;
+		push @lines, $_;
+	}
+
+	close FILE;
+
+	# Write out the chapter.
+	open FILE, ">:encoding(utf8)", $chapter_file
+		or die "Cannot write $chapter_file ($!)";
+	print FILE join("", @lines);
+	close FILE;
+}
+
+#
+# Pandoc
+#
+
+sub pandoc_section
+{
+	# Pull out the information we need.
+	my ($working, $id, $numeric) = @_;
+   
+	print STDERR "  Generating $id section in LaTeX\n"
+		if $VERBOSE;
+
+	# Write out the file.
+	my $filename = sprintf("%s/%02d-%s.tex", $working, $numeric, $id);
+
+	open OUT, ">:encoding(utf8)", $filename
+		or die "Cannot write $filename ($!)";
+
+	printf OUT "%%%% BEGIN %02d-%s\n", $numeric, $id;
+
+	# Open a PIPE to pandoc.
+	open(
+		PIPE,
+		"-|:encoding(utf8)",
+		"$PANDOC $working/$id.markdown -t latex --no-tex-ligatures --smart --chapters --no-wrap")
+		or die "Cannot open pipe to $PANDOC ($!)";
+
+	while (<PIPE>)
+	{
+		# For LaTeX, we don't use \url.
+		s@\\url\{([^\}]+)\}@$1@sg;
+
+		# Write out the line to the file.
+		print OUT;
+	}
+
+	# Finish up the streams.
+	printf OUT "%%%% END %02d-%s\n", $numeric, $id;
+	close OUT;
+	close PIPE;
+}
+
+sub make_block
+{
+	my ($chapter_file) = @_;
+
+	# Read in the file, excluding the chapter.
+	print STDERR "  Reading $chapter_file to change to blocks\n"
+		if $VERBOSE;
+
+	open FILE, "<:encoding(utf8)", $chapter_file
+		or die "Cannot read $chapter_file ($!)";
+
+	my @lines = ();
+
+	while (<FILE>)
+	{
+		chomp;
+		#s@\\hspace\*\{0.333em\}@\\\\@sg;
+		push @lines, $_;
+	}
+
+	close FILE;
+
+	# Write out the chapter.
+	open FILE, ">:encoding(utf8)", $chapter_file
+		or die "Cannot write $chapter_file ($!)";
+
+	foreach my $line (@lines)
+	{
+		if ($line =~ m@^\s*$@)
+		{
+		 	print FILE "\n";
+		}
+		else
+		{
+			$line =~ s@\\hspace\*\{0\.333em\}@\\\\@sg;
+			$line =~ s@\\{4}@\\\\\\vskip 1\\baselineskip @sg;
+			print FILE '\noindent ', $line, ' \vskip 1\baselineskip', "\n";
+		}
+	}
+
+	close FILE;
+}
+
+sub remove_chapter
+{
+	my ($chapter_file) = @_;
+
+	# Read in the file, excluding the chapter.
+	print STDERR "  Reading $chapter_file to remove chapter\n"
+		if $VERBOSE;
+
+	open FILE, "<:encoding(utf8)", $chapter_file
+		or die "Cannot read $chapter_file ($!)";
+
+	my @lines = ();
+
+	while (<FILE>)
+	{
+		next if m@\\chapter@;
+		push @lines, $_;
+	}
+
+	close FILE;
+
+	# Write out the chapter.
+	print STDERR "  Writing $chapter_file to remove chapter\n"
+		if $VERBOSE;
+
+	open FILE, ">:encoding(utf8)", $chapter_file
+		or die "Cannot write $chapter_file ($!)";
+	print FILE join("", @lines);
+	close FILE;
+}
+
+sub unlist_chapter
+{
+	my ($chapter_file) = @_;
+
+	# Read in the file, excluding the chapter.
+	print STDERR "  Reading $chapter_file to unlist chapter\n"
+		if $VERBOSE;
+
+	open FILE, "<:encoding(utf8)", $chapter_file
+		or die "Cannot read $chapter_file ($!)";
+
+	my @lines = ();
+
+	while (<FILE>)
+	{
+		s@\\chapter@\\chapter\*@s;
+		push @lines, $_;
+	}
+
+	close FILE;
+
+	# Write out the chapter.
+	print STDERR "  Writing $chapter_file to remove chapter\n"
+		if $VERBOSE;
+
+	open FILE, ">:encoding(utf8)", $chapter_file
+		or die "Cannot write $chapter_file ($!)";
+	print FILE join("", @lines);
+	close FILE;
+}
+
+#
+# Front Matter
+#
+
+sub extract_mainmatter
+{
+	my ($working) = @_;
+
+	system(
+		$MARKDOWN_EXTRACT,
+		"$working/source.markdown",
+		"--not",
+		"--yaml",
+		"--id=legal",
+		"--id=dedication",
+		"--id=acknowledgments",
+		"--class=backmatter",
+		"--output=$working/mainmatter.markdown");
+	print STDERR "  Extracted main matter\n" if $VERBOSE;
+}
+
+sub extract_section
+{
+	my $working = shift @_;
+	my $type = shift @_;
+	my $id = shift @_;
+
+	system(
+		$MARKDOWN_EXTRACT,
+		"$working/source.markdown",
+		"--$type=$id",
+		"--output=$working/$id.markdown");
+
+	my $found = -s "$working/$id.markdown" > 0;
+
+	if ($found)
+	{
+		print STDERR "  Extracted $id\n" if $VERBOSE;
+		return 1;
+	}
+}
+
+#
+# Naming
+#
+
+sub get_output_filename
+{
+	my $filename = shift @_;
+	my $dirname = dirname($filename);
+	my $basename = basename($filename, ".markdown");
+
+	return "$dirname/$basename.pdf";
+}
+
+sub create_working_directory
+{
+	my $working = $DEBUG
+		? "/tmp/format-markdown-pdf"
+		: "/tmp/format-markdown-pdf-$$";
+
+	remove_working_directory($working);
+	system("mkdir", $working) unless -d $working;
+
+	print STDERR "  Created $working\n" if $VERBOSE;
+
+	return $working;
+}
+
+sub remove_working_directory
+{
+	my $working = shift @_;
+
+	if (-d $working)
+	{
+		if ($DEBUG)
+		{
+			foreach my $file (glob("$working/*"))
+			{
+				unlink($file);
+			}
+
+			print STDERR "  Removed $working contents\n" if $VERBOSE;
+		}
+		else
+		{
+			my $selector = $working;
+			system("rm", "-rf", $selector);
+			print STDERR "  Removed $selector\n" if $VERBOSE;
+		}
+	}
+}
+
+#
+# Running
+#
+
+sub execute
+{
+	my $prefix = shift @_;
+	print STDERR $prefix . "Running " . join(" ", @_) . "\n"
+		if $VERBOSE;
+	system(@_);
+}

@@ -58,6 +58,7 @@ if ($OUTPUT ne "-")
 }
 else
 {
+	binmode(STDOUT, ":raw");
 	open($out, '>&', \*STDOUT)
 }
 
@@ -93,13 +94,15 @@ if ($INCLUDE_YAML)
 my $is_writing = $NOT_OPERATION;
 
 # Go through the lines and write it out.
+my $blank_before = 1;
+
 while (@lines)
 {
 	# Pull off the line.
 	my $line = shift @lines;
 
 	# See if we have an ATX header.
-	if ($line =~ m@$ATX_HEADER_REGEX@)
+	if ($blank_before && $line =~ m@$ATX_HEADER_REGEX@)
 	{
 		# Pull out the parameters.
 		my $depth = $1;
@@ -153,6 +156,14 @@ while (@lines)
 		{
 			$is_writing = !$is_writing;
 		}
+	}
+	elsif ($line =~ m@^\s*$@)
+	{
+		$blank_before = 1;
+	}
+	else
+	{
+		$blank_before = 0;
 	}
 
 	# Write it out, if we are writing.
