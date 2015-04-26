@@ -1,0 +1,522 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+use utf8;
+use feature 'unicode_strings';
+
+# Modules
+use Archive::Zip;
+use Cwd;
+use Encode;
+use File::Basename;
+use Getopt::Long;
+use YAML;
+
+# Constants
+my $ATX_HEADER_REGEX = '^\s{0,3}(\#+)\s*(.*?)(?:\s*\{(.*?)\}\s*)?$';
+
+#
+# Parameters and Variables
+#
+
+# Variables
+my $DEBUG = 0;
+my $EPIGRAPHS = 0;
+my $INCLUDE = 0;
+my $OUTPUT = undef;
+my $VERBOSE = 0;
+
+# Files
+my $MARKDOWN_EXTRACT = "markdown-extract";
+my $MARKDOWN_INCLUDE = "markdown-include";
+my $REFERENCE = undef;
+my $PANDOC = "pandoc";
+
+# Command-Line Options
+&GetOptions(
+	"debug|d!" => \$DEBUG,
+	"epigraphs!" => \$EPIGRAPHS,
+	"include|i!" => \$INCLUDE,
+	"reference|r=s" => \$REFERENCE,
+	"output|o=s" => \$OUTPUT,
+	"verbose|v!" => \$VERBOSE,
+	);
+
+# Validation
+die "Need at least one input file"
+	unless @ARGV > 0;
+die "Cannot use --out or -o with multiple files."
+	if defined $OUTPUT && @ARGV > 1;
+
+# UTF-8
+binmode(STDOUT, ":raw");
+binmode(STDERR, ":raw");
+
+#
+# Processing
+#
+
+# Loop through the files from the command line.
+foreach my $filename (@ARGV)
+{
+	# Report what file we are working on.
+	print STDERR "$filename\n" if $VERBOSE;
+
+	# Figure out the output name.
+	my $output_filename = defined $OUTPUT
+		? $OUTPUT
+		: get_output_filename($filename);
+	print STDERR "  Output $output_filename\n" if $VERBOSE;
+
+	# Set up the temporary directory.
+	my $working = create_working_directory();
+
+	# Expand and normalize the Markdown.
+	print STDERR "  Expanding source file\n" if $VERBOSE;
+	execute(
+		"  ",
+		$MARKDOWN_INCLUDE,
+		"--output=$working/source.markdown",
+		"--strip",
+		"--expand-ids",
+		$filename);
+
+	# Make sure the file exists.
+	die "Cannot find $working/source.markdown"
+		unless -f "$working/source.markdown";
+
+	# Get the title and creator for this piece. We assume this is in
+	# the YAML header of the source file.
+	my ($title, $author) = get_metadata("$working/source.markdown");
+
+	# Insert the TOC.
+	create_toc($working, "$working/source.markdown");
+
+	# Copy in the source data.
+	copy_reference_odt($working);
+
+	# Generate the ODT.
+	generate_odt($working);
+
+	# Update the ODT contents.
+	update_odt("$working/combined.odt", $title, $author);
+
+    # Copy the EPUB into the output filename.
+    system("cp", "$working/combined.odt", $output_filename);
+
+	# Clean up our working directory.
+	remove_working_directory($working)
+		unless $DEBUG;
+}
+
+print STDERR "Done.\n" if $VERBOSE;
+
+#
+# Post-Processing
+#
+
+sub update_odt
+{
+	# Open the ODT as a ZIP archive.
+	my ($odt, $title, $author) = @_;
+	my $zip = Archive::Zip->new();
+
+	die "Cannot read zip archive $odt"
+		unless ($zip->read($odt) == Archive::Zip::AZ_OK);
+
+	# Update the style.
+	update_odt_style($zip, $title, $author);
+	update_odt_contents($zip, $title, $author);
+
+	# Write out the Archive.
+	$zip->overwrite();
+}
+
+sub update_odt_style
+{
+	my ($zip, $title, $author) = @_;
+	my $contents = $zip->contents("styles.xml");
+	
+	$contents =~ s@{{TITLE}}@$title@sg;
+	$contents =~ s@{{AUTHOR}}@$author@sg;
+
+	$zip->contents("styles.xml", $contents);
+}
+
+sub update_odt_contents
+{
+	# Go through the lines in the content file.
+	my ($zip, $title, $author) = @_;
+	my $contents = decode_utf8($zip->contents("content.xml"));
+	my @input = split(/\n/, $contents);
+	my @output = ();
+	my ($in_toc, $in_legal, $in_dedication) = (0, 0, 0);
+	my $first_para = 0;
+	my %quotations = ();
+	
+	foreach my $line (@input)
+	{
+		# Look for styles.
+		if ($line =~ m@<style:style style:name="(\w+)" style:family="paragraph" style:parent-style-name="Quotations">@s)
+		{
+			$quotations{$1} = 1
+		}
+
+		# Look for a header which changes processing.
+		if ($line =~ m@(<text:h text:style-name="Heading_20_1" text:outline-level="1">)(.*?)(</text:h>)@)
+		{
+			# Reset all of the old flags.
+			($in_toc, $in_legal, $in_dedication) = 0;
+
+			# Grab the title.
+			my $toc_before = $1;
+			my $toc_title = $2;
+			my $toc_after = $3;
+
+			$in_legal = 1 if $toc_title eq "Legal";
+			$in_dedication = 1 if $toc_title eq "Dedication";
+			$in_toc = 1 if $toc_title eq "Table of Contents";
+			$first_para = 1;
+
+			# We ignore some titles.
+			next if $in_legal;
+			next if $in_dedication;
+
+			# Figure out the ID.
+			my $id = lc($toc_title);
+			$id =~ s@\s+@-@sg;
+			$id =~ s@^(\d+)@id$1@sg;
+
+			# Rebuild the line.
+			my $bookmark_start = "<text:bookmark-start text:name=\"$id\"/>";
+			my $bookmark_end = "<text:bookmark-end text:name=\"$id\"/>";
+			$line = "$toc_before$bookmark_start$toc_title$bookmark_end$toc_after";
+		}
+
+		# Depending on the section, update the line.
+		if ($in_legal) { update_odt_legal(\$line, $first_para); }
+		elsif ($in_dedication) { update_odt_dedication(\$line, $first_para); }
+		elsif ($in_toc) { update_odt_toc(\$line); }
+		else { update_odt_other(\$line, \%quotations, $author); }
+
+		# If we processed a paragraph, clear the flag.
+		$first_para = 0 if $line =~ m@<text:p @;
+
+		# Add the line to the buffer.
+		push @output, $line;
+	}
+
+	# Write out the contents.
+	$zip->contents("content.xml", encode_utf8(join("\n", @output)));
+}
+
+sub update_odt_other
+{
+	# Pull out the lines.
+	my ($line, $quotations, $author) = @_;
+
+	# For some reason, the author doesn't show up in this.
+	if ($$line =~ m@<text:h text:style-name="Title">@)
+	{
+		$$line .= "<text:p text:style-name=\"Author\">$author</text:p>";
+	}
+
+	# Modify the section breaks.
+	$$line =~ s@text:p text:style-name="Horizontal_20_Line" />@text:p text:style-name="Section"># # #</text:p>@sg;
+
+	# Modify the quotations.
+	foreach my $quotation_style (keys(%$quotations))
+	{
+		$$line =~ s@\s*—\s*@</text:p><text:p text:style-name="Quotations Attribution">—@sg
+			if $$line =~ m@text:style-name="$quotation_style"@;
+	}
+
+	# Modify the first paragraph.
+	$$line =~ s@text:style-name="First_20_paragraph@text:style-name="First_20_Text_20_Body@sg;
+}
+
+sub update_odt_legal
+{
+	my ($line, $first_para) = @_;
+	my $name = $first_para ? "First_20_Legal" : "Legal";
+	$$line =~ s@text:p text:style-name="[\w_]+"@text:p text:style-name="$name"@sg;
+}
+
+sub update_odt_toc
+{
+	my ($line) = @_;
+	$$line =~ s@text:p text:style-name="[\w_]+"@text:p text:style-name="TOC_20_paragraph"@sg;
+}
+
+sub update_odt_dedication
+{
+	my ($line, $first_para) = @_;
+	my $name = $first_para ? "First_20_Dedication" : "Dedication";
+	$$line =~ s@text:p text:style-name="[\w_]+"@text:p text:style-name="$name"@sg;
+}
+
+#
+# Generation
+#
+
+sub generate_odt
+{
+	my ($working) = @_;
+
+	# Move into the build directory.
+	my $cwd = getcwd;
+	Cwd::chdir($working);
+
+	# Build the command.
+	my @arguments = (
+		$PANDOC,
+		"$working/toc.markdown",
+		"-o", "$working/combined.odt",
+		"--standalone",
+		"--data-dir=$working",
+		"--smart",
+		"--normalize");
+
+	# Run the command.
+	execute("  ", @arguments);
+
+	# Go back to the directory.
+	Cwd::chdir($cwd);
+}
+
+sub copy_reference_odt
+{
+	my $working = shift @_;
+	
+	system("cp", $REFERENCE, "$working/reference.odt")
+		if defined $REFERENCE && -f $REFERENCE;
+	system(
+		"cp",
+		dirname($0) . "/data/odt/$REFERENCE.odt",
+		"$working/reference.odt")
+		if defined $REFERENCE
+		&& -f dirname($0) . "/data/odt/$REFERENCE.odt"
+		&& ! -f "$working/reference.odt";
+	system(
+		"cp",
+		dirname($0) . "/data/odt/reference.odt",
+		"$working/reference.odt")
+		unless -f "$working/reference.odt";
+}
+
+#
+# Markdown
+#
+
+sub create_toc
+{
+	# Pull out the parameters.
+	my $working = shift @_;
+	my $markdown = shift @_;
+
+	# First parse the markdown file and look for non-frontmatter and
+	# non-backmatter sections.
+	my @sections = ();
+	my $first_backmatter = 1;
+	my $first_frontmatter = 1;
+	my $first_mainmatter = 1;
+
+	open IN, "<:encoding(utf8)", $markdown
+		or die "Cannot read $markdown ($!)";
+
+	while (<IN>)
+	{
+		# Ignore non-sections.
+		next unless m@$ATX_HEADER_REGEX@;
+		
+		my ($title, $attrs) = ($2, $3);
+
+		die "Attributes are blank: $_" unless defined $attrs;
+		die "Cannot parse $attrs" unless $attrs =~ m@(\#[^\s\}]+)@;
+
+		my $id = $1;
+
+		# Figure out the attributes.
+		my $is_backmatter = $attrs =~ m@\.backmatter@;
+		my $is_frontmatter = $attrs =~ m@\.frontmatter@;
+		my $is_mainmatter = !$is_backmatter && !$is_frontmatter;
+
+		next if $attrs =~ m@\#legal@;
+		next if $attrs =~ m@\#dedication@;
+
+		# Add a line break, if we need one.
+		my $is_first_backmatter =
+			$first_backmatter
+			&& $is_backmatter
+			&& ($first_mainmatter == 0 || $first_frontmatter == 0);
+		my $is_first_mainmatter =
+			$first_mainmatter
+			&& $is_mainmatter
+			&& $first_frontmatter == 0;
+		
+		if ($is_first_backmatter || $is_first_mainmatter)
+		{
+			push @sections, "\\";
+		}
+
+		# Add the section.
+		push @sections, "[$title]($id)\n";
+
+		# Clear out the flags.
+		$first_backmatter = 0 if $is_backmatter;
+		$first_frontmatter = 0 if $is_frontmatter;
+		$first_mainmatter = 0 if $is_mainmatter;
+	}
+
+	close IN;
+
+	# Finish up this round. Now, scan back through it and write out
+	# "toc.markdown" with the contents, inserting the TOC right before
+	# the main matter.
+	my $insert_toc = 0;
+
+	open IN, "<:encoding(utf8)", $markdown
+		or die "Cannot read $markdown ($!)";
+	open OUT, ">:encoding(utf8)", "$working/toc.markdown"
+		or die "Cannot write $working/toc.markdown ($!)";
+
+	while (<IN>)
+	{
+		# Ignore non-sections.
+		if (m@$ATX_HEADER_REGEX@ && !$insert_toc)
+		{
+			# Pull out the elements.
+			my ($title, $attrs) = ($2, $3);
+			m@(\#[^\s\}]+)@;
+			my $id = $1;
+			
+			# Figure out the attributes.
+			my $is_backmatter = $attrs =~ m@\.backmatter@;
+			my $is_frontmatter = $attrs =~ m@\.frontmatter@;
+			my $is_mainmatter = !$is_backmatter && !$is_frontmatter;
+
+			# If we are in the main matter, add the TOC.
+			if ($is_mainmatter)
+			{
+				print OUT "# Table of Contents {#toc}\n";
+				print OUT "\n";
+				print OUT join("\n", @sections), "\n";
+				print OUT "\n";
+
+				$insert_toc = 1;
+			}
+		}
+
+		# Write out the line.
+		print OUT $_;
+	}
+
+	# Close the files.
+	close IN;
+	close OUT;
+}
+
+#
+# Naming
+#
+
+sub get_output_filename
+{
+	my $filename = shift @_;
+	my $dirname = dirname($filename);
+	my $basename = basename($filename, ".markdown");
+
+	return "$dirname/$basename.odt";
+}
+
+sub create_working_directory
+{
+	my $working = $DEBUG
+		? "/tmp/format-markdown-odt"
+		: "/tmp/format-markdown-odt-$$";
+
+	remove_working_directory($working);
+	system("mkdir", $working) unless -d $working;
+
+	print STDERR "  Created $working\n" if $VERBOSE;
+
+	return $working;
+}
+
+sub remove_working_directory
+{
+	my $working = shift @_;
+
+	if (-d $working)
+	{
+		if ($DEBUG)
+		{
+			foreach my $file (glob("$working/*"))
+			{
+				unlink($file);
+			}
+
+			print STDERR "  Removed $working contents\n" if $VERBOSE;
+		}
+		else
+		{
+			my $selector = $working;
+			system("rm", "-rf", $selector);
+			print STDERR "  Removed $selector\n" if $VERBOSE;
+		}
+	}
+}
+
+#
+# Metadata
+#
+
+sub get_metadata
+{
+	# Load the YAML into memory.
+	my $filename = shift @_;
+	my @lines = ();
+
+	open FILE, "<:encoding(utf8)", $filename;
+	push @lines, $_ while <FILE>;
+	close FILE;
+
+	my $buffer = join("", @lines);
+
+	# Strip off the header.
+	$buffer =~ s@^(---.*\n---\n).*$@$1@sg;
+	my ($yaml) = Load($buffer);
+
+	# Pull out the elements.
+	my $title = $$yaml{title};
+	my $author = $$yaml{creator};
+
+	print STDERR "  title: $title\n" if $VERBOSE;
+	print STDERR "  author: $author\n" if $VERBOSE;
+
+	die "Cannot find title in $buffer" unless defined $title;
+	die "Cannot find author in $buffer" unless defined $author;
+
+	return ($title, $author);
+}
+
+#
+# Running
+#
+
+sub execute
+{
+	my $prefix = shift @_;
+	print STDERR $prefix . "Running " . join(" ", @_) . "\n"
+		if $VERBOSE;
+	my $results = system(@_);
+	my $code = $results << 8;
+
+	die "There was an error running command" if $code != 0;
+}
