@@ -23,6 +23,7 @@ use YAML;
 
 # Variables
 my $DEBUG = 0;
+my $DEDICATION = 0;
 my $EPIGRAPHS = 0;
 my $EPUB3 = 0;
 my $INCLUDE = 0;
@@ -43,6 +44,7 @@ my $PANDOC = "pandoc";
 	"cover|c=s" => \$COVER,
 	"css|s=s" => \$CSS,
 	"debug|d!" => \$DEBUG,
+	"dedication!" => \$DEDICATION,
 	"epigraphs!" => \$EPIGRAPHS,
 	"epub3|3!" => \$EPUB3,
 	"include|i!" => \$INCLUDE,
@@ -215,7 +217,7 @@ sub arrange_epub
 			update_legal(\$contents);
 			$changed = 1;
 		}
-		elsif ($id eq "dedication")
+		elsif ($DEDICATION && $id eq "dedication")
 		{
 			update_dedication(\$contents);
 			$changed = 1;
@@ -254,7 +256,11 @@ sub update_navigation
 	my $ref = shift @_;
 
 	# Remove the links for the frontmatter.
-	foreach my $name (qw(Legal Dedication))
+	my @remove_ids = ();
+	push @remove_ids, "Legal";
+	push @remove_ids, "Dedication" if $DEDICATION;
+
+	foreach my $name (@remove_ids)
 	{
 		$$ref =~ s@
       <li [^\>]+>\s*
@@ -358,7 +364,8 @@ sub update_opf
 		my @frontmatter = ();
 
 		push @frontmatter, extract_item(\@items, "idref", "legal");
-		push @frontmatter, extract_item(\@items, "idref", "dedication");
+		push @frontmatter, extract_item(\@items, "idref", "dedication")
+			if $DEDICATION;
 
 		# Get rid of the chapters and appendixes.
 		extract_item(\@items, "idref", "chapters");
