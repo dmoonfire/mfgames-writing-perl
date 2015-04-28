@@ -100,9 +100,15 @@ foreach my $filename (@ARGV)
 	# Extract the legal and dedication.
 	my $index = 26;
 
+	extract_section($working, "source.markdown", "class", "frontmatter");
+
 	for my $id (qw(legal dedication acknowledgments))
 	{
-		my $has_section = extract_section($working, "id", $id);
+		my $has_section = extract_section(
+			"$working",
+			"frontmatter.markdown",
+			"id",
+			$id);
 
 		if ($has_section)
 		{
@@ -132,7 +138,11 @@ foreach my $filename (@ARGV)
 	}
 
 	# Extract the backmatter.
-	my $has_backmatter = extract_section($working, "class", "backmatter");
+	my $has_backmatter = extract_section(
+		"$working",
+		"source.markdown",
+		"class",
+		"backmatter");
 
 	if ($has_backmatter)
 	{
@@ -310,8 +320,14 @@ sub gather_formats_dir
 
 sub filter_mainmatter
 {
+	# Get the parameters.
 	my $working = shift @_;
 	my $file = shift @_;
+
+	# If we don't have a filter, just pass it on.
+	return unless @_;
+
+	# Filter out the text.
 	print STDERR "  Filters: " . join(", ", @_), "\n" if $VERBOSE;
 	my $filters = join(" | ", @_);
 	my $commands = "cat $working/$file | $filters > $working/filtered.tex";
@@ -627,12 +643,13 @@ sub extract_mainmatter
 sub extract_section
 {
 	my $working = shift @_;
+	my $filename = shift @_;
 	my $type = shift @_;
 	my $id = shift @_;
 
 	system(
 		$MARKDOWN_EXTRACT,
-		"$working/source.markdown",
+		"$working/$filename",
 		"--$type=$id",
 		"--output=$working/$id.markdown");
 
