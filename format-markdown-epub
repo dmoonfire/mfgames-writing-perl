@@ -93,6 +93,7 @@ foreach my $filename (@ARGV)
 		$MARKDOWN_INCLUDE,
 		"--output=$working/source.markdown",
 		"--strip",
+		"--images-dir=$working",
 		$filename);
 
 	# Make sure the file exists.
@@ -224,6 +225,7 @@ sub arrange_epub
 		}
 		
 		# Update breaks.
+		$changed += update_captions(\$contents);
 		$changed += update_breaks(\$contents);
 		$changed += update_epigraphs(\$contents) if $EPIGRAPHS;
 		
@@ -429,6 +431,15 @@ sub update_dedication
 	my $ref = shift @_;
 	$$ref =~ s@<h1>.*?</h1>@@sg;
 	$$ref =~ s@<p>@<p class="center">@sg;
+}
+
+# Remove the caption elements.
+sub update_captions
+{
+	my $ref = shift @_;
+	print STDERR "    Updating captions\n" if $VERBOSE;
+	my $changed = $$ref =~ s@<p class="caption">.*?</p>@@sg;
+	return $changed;
 }
 
 # Remove the <hr/> elements and replace them with a more obvious break.
