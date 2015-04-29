@@ -98,6 +98,7 @@ foreach my $filename (@ARGV)
 		$MARKDOWN_INCLUDE,
 		"--output=$working/include.markdown",
 		"--images-dir=$working",
+		"--convert-images",
 		$filename);
 
 	# Make sure the file exists.
