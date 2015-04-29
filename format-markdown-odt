@@ -28,12 +28,14 @@ my $ATX_HEADER_REGEX = '^\s{0,3}(\#+)\s*(.*?)(?:\s*\{(.*?)\}\s*)?$';
 # Variables
 my $DEBUG = 0;
 my $EPIGRAPHS = 0;
+my @FILTER_LINKS = ();
 my $INCLUDE = 0;
 my $OUTPUT = undef;
 my $VERBOSE = 0;
 
 # Files
 my $MARKDOWN_EXTRACT = "markdown-extract";
+my $MARKDOWN_FILTER_LINKS = "markdown-filter-links";
 my $MARKDOWN_INCLUDE = "markdown-include";
 my $REFERENCE = undef;
 my $PANDOC = "pandoc";
@@ -42,6 +44,7 @@ my $PANDOC = "pandoc";
 &GetOptions(
 	"debug|d!" => \$DEBUG,
 	"epigraphs!" => \$EPIGRAPHS,
+	"filter-links=s" => \@FILTER_LINKS,
 	"include|i!" => \$INCLUDE,
 	"reference|r=s" => \$REFERENCE,
 	"output|o=s" => \$OUTPUT,
@@ -82,14 +85,18 @@ foreach my $filename (@ARGV)
 	execute(
 		"  ",
 		$MARKDOWN_INCLUDE,
-		"--output=$working/source.markdown",
+		"--output=$working/include.markdown",
 		"--strip",
 		"--expand-ids",
+		"--images-dir=$working",
 		$filename);
 
 	# Make sure the file exists.
-	die "Cannot find $working/source.markdown"
-		unless -f "$working/source.markdown";
+	die "Cannot find $working/include.markdown"
+		unless -f "$working/include.markdown";
+
+	# Filter out the links from the input.
+	filter_links($working, "include.markdown", "source.markdown");
 
 	# Get the title and creator for this piece. We assume this is in
 	# the YAML header of the source file.
@@ -334,7 +341,8 @@ sub create_toc
 	{
 		# Ignore non-sections.
 		next unless m@$ATX_HEADER_REGEX@;
-		
+		next unless $1 eq "#";
+
 		my ($title, $attrs) = ($2, $3);
 
 		die "Attributes are blank: $_" unless defined $attrs;
@@ -420,6 +428,23 @@ sub create_toc
 	# Close the files.
 	close IN;
 	close OUT;
+}
+
+sub filter_links
+{
+	# Pull out the parameters.
+	my ($working, $input, $output) = @_;
+
+	# Build up a list of filters.
+	my @filter_params = ();
+	map { push @filter_params, "--filter=$_" } @FILTER_LINKS;
+
+	execute(
+		"  ",
+		$MARKDOWN_FILTER_LINKS,
+		"--output=$working/$output",
+		@filter_params,
+		"$working/$input");
 }
 
 #
