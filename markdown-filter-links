@@ -1,0 +1,184 @@
+#!/usr/bin/perl
+
+# Processes MultiMarkdown link attributes and removes them since
+# Pandoc and other processors can't handle it. At the same time, it
+# also filters out links as requested by the command line.
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+use utf8;
+
+# Modules
+use Cwd;
+use Getopt::Long;
+use YAML;
+use Data::Dumper;
+use File::Basename qw(dirname);
+
+#
+# Options
+#
+
+my @FILTERS = ();
+my $OUTPUT = "-";
+my $VERBOSE = 0;
+
+&GetOptions(
+	"filter=s" => \@FILTERS,
+	"output|o=s" => \$OUTPUT,
+	"verbose|v!" => \$VERBOSE,
+	);
+
+#
+# Constants
+#
+
+my $LINK_REGEX = '\[([^\]]+)\]\(([^\)]+)\)\{([^\}]+)\}';
+
+#
+# UTF-8
+#
+
+binmode(STDOUT, ":raw");
+binmode(STDERR, ":raw");
+
+#
+# Processing
+#
+
+# Normalize the filter.
+my %FILTERS = ();
+
+map { $FILTERS{$_} = 1 } @FILTERS;
+
+# Figure out the filename.
+my $file = $ARGV[0];
+my $abs_path = Cwd::abs_path($file);
+my $dir_path = dirname($abs_path);
+
+# We load the entire file into memory because we'll be manipulating
+# lists when we encounter specialized sections.
+my @lines = ();
+
+open FILE, "<:encoding(utf8)", $file
+	or die "Cannot read $file ($!)";
+
+while (<FILE>)
+{
+	chomp;
+	push @lines, $_;
+}
+
+close FILE;
+
+#
+# YAML Processing
+#
+
+my $yaml = read_yaml(\@lines);
+
+#
+# Line Processing
+#
+
+# Create a new list of the lines, expanding various elements as we go.
+my @new_lines = ();
+
+while (@lines)
+{
+	# Grab the next line.
+	my $line = shift @lines;
+
+	# See if we have a link with an attribute.
+	while ($line =~ s@$LINK_REGEX@PLACEHOLDER@)
+	{
+		# Save the captures.
+		my ($title, $href, $attrs) = ($1, $2, $3);
+
+		# See if we are in the attribute list.
+		my @attrs = split(/\s+/, $attrs);
+		my $replace = "[$title]($href)";
+
+		map { $replace = "" if exists $FILTERS{$_} } @attrs;
+
+		# Rebuild the link without the attribute.
+		$line =~ s@PLACEHOLDER@$replace@sg;
+	}
+
+	# Simply add the line to the new list.
+	push @new_lines, $line;
+}
+
+#
+# Write out the resulting lines.
+#
+
+# Figure out where we're writing.
+my $out;
+
+if ($OUTPUT ne "-")
+{
+	# Write out the handle.
+	open $out, ">:encoding(utf8)", $OUTPUT
+		or die "Cannot write $out ($!)";
+}
+else
+{
+	open($out, '>&', \*STDOUT)
+}
+
+# Write out the header.
+if (defined $yaml)
+{
+	print $out Dump($yaml);
+	print $out "---\n";
+}
+
+# Write out the lines.
+foreach my $line (@new_lines)
+{
+	print $out "$line\n";
+}
+
+# Close the file, if we opened it.
+close $out if $OUTPUT ne "-";
+
+#
+# YAML
+#
+
+sub read_yaml
+{
+	my $lines = shift @_;
+	my $yaml = undef;
+
+	if ($$lines[0] =~ m@^---@)
+	{
+		# Pull out the YAML header from the lines.
+		my @yaml = shift @$lines;
+		push @yaml, shift @$lines while $$lines[0] ne "---";
+		push @yaml, shift @$lines;
+		
+		# Combine everything together. We also mask tabs into spaces
+		# because YAML doesn't allow for tabs but I'm not going to
+		# change my tab key to fit their conventions.
+		my $yaml_buffer = join("\n", @yaml) . "\n";
+		$yaml_buffer =~ s@\t@    @sg;
+
+		# Parse the YAML header.
+		($yaml, my $ignore) = Load($yaml_buffer);
+
+		# Put the copyright back.
+		$$yaml{rights} =~ s@COPYRIGHT@©@sg if exists $$yaml{rights};
+
+		# If we can't find the title, we have a problem.
+		die "Cannot find title in file" unless exists $$yaml{title};
+	}
+
+	return $yaml;
+}

@@ -43,7 +43,7 @@ my $VERBOSE = 0;
 # Constants
 #
 
-my $ATX_HEADER_REGEX = '\s{0,3}(\#+)\s*(.*?)(?:\s*\{(.*?)\}\s*)?$';
+my $ATX_HEADER_REGEX = '^\s{0,3}(\#+)\s*(.*?)(?:\s*\{(.*?)\}\s*)?$';
 my $IMAGE_REGEX = '\!\[([^\]]*)\]\(([^\)]+)\)';
 
 #
@@ -158,7 +158,7 @@ while (@lines)
 				print STDERR "  $link\n" if $VERBOSE;
 				
 				push @new_lines, insert_file(
-					$dir_path, $link, $atx_header, $attrs);
+					$dir_path, $link, $atx_header, $attrs, $section_attrs);
 			}
 			
 			# Finish up.
@@ -334,7 +334,7 @@ sub check_list_section
 sub insert_file
 {
 	# Pull out the variables.
-	my ($dir, $file, $atx, $class) = @_;
+	my ($dir, $file, $atx, $class, $section_attrs) = @_;
 
 	# Figure out the path of the file.
 	my $path = Cwd::abs_path($file);
@@ -354,6 +354,20 @@ sub insert_file
 
 		# Check for images relative to this file.
 		gather_images($path_dir, \$_);
+
+		# See if we need to modify the headers.
+		if ($section_attrs ne "" && s@$ATX_HEADER_REGEX@PLACEHOLDER@)
+		{
+			my ($lead, $title, $attrs) = ($1, $2, $3);
+			my $new_attrs = "";
+			$new_attrs .= (defined $attrs ? $attrs : "");
+			$new_attrs .= $section_attrs;
+			$new_attrs =~ s@^\s+@@;
+
+			s@PLACEHOLDER@$lead $title {$new_attrs}@;
+		}
+
+		# Add the line in the list.
 		push @lines, $_;
 	}
 	
