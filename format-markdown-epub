@@ -22,10 +22,12 @@ use YAML;
 #
 
 # Variables
+my $ACKNOWLEDGMENTS = 0;
 my $DEBUG = 0;
 my $DEDICATION = 0;
 my $EPIGRAPHS = 0;
 my $EPUB3 = 0;
+my @FILTER_LINKS = ();
 my $INCLUDE = 0;
 my $OUTPUT = undef;
 my $VERBOSE = 0;
@@ -35,18 +37,21 @@ my $COVER = undef;
 my $CSS = undef;
 my $EPUBCHECK = "epubcheck";
 my $MARKDOWN_EXTRACT = "markdown-extract";
+my $MARKDOWN_FILTER_LINKS = "markdown-filter-links";
 my $MARKDOWN_INCLUDE = "markdown-include";
 my $METADATA = undef;
 my $PANDOC = "pandoc";
 
 # Command-Line Options
 &GetOptions(
+	"acknowledgments|a!" => \$ACKNOWLEDGMENTS,
 	"cover|c=s" => \$COVER,
 	"css|s=s" => \$CSS,
 	"debug|d!" => \$DEBUG,
 	"dedication!" => \$DEDICATION,
 	"epigraphs!" => \$EPIGRAPHS,
 	"epub3|3!" => \$EPUB3,
+	"filter-links=s" => \@FILTER_LINKS,
 	"include|i!" => \$INCLUDE,
 	"metadata|m=s" => \$METADATA,
 	"output|o=s" => \$OUTPUT,
@@ -91,14 +96,16 @@ foreach my $filename (@ARGV)
 	execute(
 		"  ",
 		$MARKDOWN_INCLUDE,
-		"--output=$working/source.markdown",
-		"--strip",
+		"--output=$working/include.markdown",
 		"--images-dir=$working",
 		$filename);
 
 	# Make sure the file exists.
-	die "Cannot find $working/source.markdown"
-		unless -f "$working/source.markdown";
+	die "Cannot find $working/include.markdown"
+		unless -f "$working/include.markdown";
+
+	# Filter out the links from the input.
+	filter_links($working, "include.markdown", "source.markdown");
 
 	# Copy in the source data.
 	system("cp", $COVER, "$working/cover.jpg")
@@ -234,7 +241,9 @@ sub arrange_epub
 		
 		# Remove the chapters and appendixes section.
 		$zip->removeMember($memberName)
-			if $id eq "chapters" or $id eq "appendixes";
+			if $id eq "chapters"
+			or $id eq "appendixes"
+			or $id eq "frontmatter";
 	}
 	
 	# Parse the `content.opf` to see if we have a legal.
@@ -260,6 +269,7 @@ sub update_navigation
 	# Remove the links for the frontmatter.
 	my @remove_ids = ();
 	push @remove_ids, "Legal";
+	push @remove_ids, "Acknowledgments" if $ACKNOWLEDGMENTS;
 	push @remove_ids, "Dedication" if $DEDICATION;
 
 	foreach my $name (@remove_ids)
@@ -272,6 +282,10 @@ sub update_navigation
       </li>\s*
     @@sgx;
 	}
+
+	# Remove blanks.
+	$$ref =~ s@<ol[^\>]*>\s*</ol>@@sg;
+	$$ref =~ s@<li id="[^\"]+">\s*<a href="[^\"]+">\s*<span>Frontmatter</span>\s*</a>\s*</li>@@sg;
 
 	# Rename the title.
 	$$ref =~ s@(<h1 id="toc-title")>.*?<(/h1>)@$1>Table of Contents<$2@sg;
@@ -317,7 +331,7 @@ sub update_ncx
 	my $changed = 0;
 
 	# Remove the links for the frontmatter.
-	foreach my $name (qw(Chapters Appendixes))
+	foreach my $name (qw(Chapters Appendixes Frontmatter))
 	{
 		$$ref =~ s@
     <navPoint\s+id="[^"]+"\s+playOrder="\d+">\s*
@@ -368,8 +382,11 @@ sub update_opf
 		push @frontmatter, extract_item(\@items, "idref", "legal");
 		push @frontmatter, extract_item(\@items, "idref", "dedication")
 			if $DEDICATION;
+		push @frontmatter, extract_item(\@items, "idref", "acknowledgments")
+			if $ACKNOWLEDGMENTS;
 
 		# Get rid of the chapters and appendixes.
+		extract_item(\@items, "idref", "frontmatter");
 		extract_item(\@items, "idref", "chapters");
 		extract_item(\@items, "idref", "appendixes");
 
@@ -403,6 +420,7 @@ sub update_opf
 		my @items = split(/\n/, $2);
 
 		# Get rid of the chapters and appendixes.
+		extract_item(\@items, "id", "frontmatter");
 		extract_item(\@items, "id", "chapters");
 		extract_item(\@items, "id", "appendixes");
 
@@ -540,6 +558,7 @@ sub generate_epub
 		"-t", $EPUB3 ? "epub3" : "epub",
 		"-s",
 		"--toc",
+		"--toc-depth=2",
 		"--epub-chapter-level=2",
 		"--data-dir=$working",
 		"--smart",
@@ -556,6 +575,23 @@ sub generate_epub
 
 	# Go back to the directory.
 	Cwd::chdir($cwd);
+}
+
+sub filter_links
+{
+	# Pull out the parameters.
+	my ($working, $input, $output) = @_;
+
+	# Build up a list of filters.
+	my @filter_params = ();
+	map { push @filter_params, "--filter=$_" } @FILTER_LINKS;
+
+	execute(
+		"  ",
+		$MARKDOWN_FILTER_LINKS,
+		"--output=$working/$output",
+		@filter_params,
+		"$working/$input");
 }
 
 #
