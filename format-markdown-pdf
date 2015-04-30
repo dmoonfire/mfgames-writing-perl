@@ -254,6 +254,14 @@ sub gather_formats
 
 	print STDERR "  Pulling in formats\n" if $VERBOSE;
 
+	# See if we have common paths.
+	gather_formats_dir(
+		$working,
+		"/usr/share/mfgames-writing-perl/latex");
+	gather_formats_dir(
+		$working,
+		"/usr/local/share/mfgames-writing-perl/latex");
+
 	# See if we have the debugging path.
 	my $script_dir = dirname($0);
 	my $script_data_dir = "$script_dir/data";
