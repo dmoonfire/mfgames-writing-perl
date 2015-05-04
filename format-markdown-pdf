@@ -13,6 +13,7 @@ use utf8;
 use Cwd;
 use File::Basename;
 use Getopt::Long;
+use YAML;
 
 #
 # Parameters and Variables
@@ -103,6 +104,17 @@ foreach my $filename (@ARGV)
 
 	# Filter out the links from the input.
 	filter_links($working, "include.markdown", "source.markdown");
+
+	# Get the title and creator for this piece. We assume this is in
+	# the YAML header of the source file.
+	my ($title, $author) = get_metadata("$working/source.markdown");
+
+	write_section(
+		$working,
+		19,
+		"common-metadata",
+		"\\author{$author}",
+		"\\title{$title}");
 
 	# Extract the legal and dedication.
 	my $index = 26;
@@ -754,6 +766,53 @@ sub filter_links
 		"--output=$working/$output",
 		@filter_params,
 		"$working/$input");
+}
+
+sub write_section
+{
+	my $working = shift @_;
+	my $id = shift @_;
+	my $name = shift @_;
+	my $contents = join("\n", @_) . "\n";
+	my $filename = sprintf("%s/%02d-%s.tex", $working, $id, $name);
+
+	open SECTION, ">:encoding(utf8)", $filename
+		or die "Cannot write $filename ($!)";
+	print SECTION $contents;
+	close SECTION;
+}
+
+#
+# Metadata
+#
+
+sub get_metadata
+{
+	# Load the YAML into memory.
+	my $filename = shift @_;
+	my @lines = ();
+
+	open FILE, "<:encoding(utf8)", $filename;
+	push @lines, $_ while <FILE>;
+	close FILE;
+
+	my $buffer = join("", @lines);
+
+	# Strip off the header.
+	$buffer =~ s@^(---.*\n---\n).*$@$1@sg;
+	my ($yaml) = Load($buffer);
+
+	# Pull out the elements.
+	my $title = $$yaml{title};
+	my $author = $$yaml{creator};
+
+	print STDERR "  title: $title\n" if $VERBOSE;
+	print STDERR "  author: $author\n" if $VERBOSE;
+
+	die "Cannot find title in $buffer" unless defined $title;
+	die "Cannot find author in $buffer" unless defined $author;
+
+	return ($title, $author);
 }
 
 #

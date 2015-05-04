@@ -316,9 +316,9 @@ sub update_navigation
 	my $b_contents = $2;
 	$a_contents =~ s@<ol @<ul @sg;
 	$a_contents =~ s@</ol>@</ul>@sg;
-	$b_contents =~ s@</ol>@</ul>@sg;
+	$b_contents =~ s@</ol>@</ul>@sg if defined $b_contents;
 	$$ref =~ s@PLACEHOLDER@$a_contents@sg;
-	$$ref =~ s@SECONDHOLDER@$b_contents@sg;
+	$$ref =~ s@SECONDHOLDER@$b_contents@sg if defined $b_contents;
 
 	# Return if we've changed.
 	return 1;

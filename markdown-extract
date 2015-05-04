@@ -182,7 +182,7 @@ sub read_yaml
 	my $lines = shift @_;
 	my $yaml = undef;
 
-	if ($$lines[0] =~ m@^---@)
+	if (defined $$lines[0] && $$lines[0] =~ m@^---@)
 	{
 		# Pull out the YAML header from the lines.
 		my @yaml = shift @$lines;
