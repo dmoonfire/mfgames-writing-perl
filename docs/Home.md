@@ -34,7 +34,7 @@ The bulk of the system is intended to work with Markdown that includes a YAML he
 
 ## Formatting Tools
 
-* [`format-markdown-epub`](Format-EPUB)  
+* [`format-markdown-epub`](Format-EPUB.markdown)  
    Formats a Markdown file into an EPUB file.
 * `format-markdown-odt`  
    Formats a Markdown file into an OpenOffice/Libreoffice document.
