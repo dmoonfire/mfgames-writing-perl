@@ -116,7 +116,20 @@ foreach my $filename (@ARGV)
 	system("cp", $CSS, "$working/epub.css")
 		if defined $CSS;
 	system("cp", dirname($0) . "/data/epub/epub.css", "$working/epub.css")
-		unless -f "$working/epub.css";
+		if ! -f "$working/epub.css"
+		&& -f dirname($0) . "/data/epub/epub.css";
+	system(
+		"cp",
+		"/usr/local/share/mfgames-writing-perl/epub/epub.css",
+		"$working/epub.css")
+		if ! -f "$working/epub.css"
+		&& -f "/usr/local/share/mfgames-writing-perl/epub/epub.css";
+	system(
+		"cp",
+		"/usr/share/mfgames-writing-perl/epub/epub.css",
+		"$working/epub.css")
+		if ! -f "$working/epub.css"
+		&& "/usr/share/mfgames-writing-perl/epub/epub.css";
 
 	# Get the title and creator for this piece. We assume this is in
 	# the YAML header of the source file.
@@ -202,7 +215,7 @@ sub arrange_epub
 		# Normally, we only process XHTML files.
 		next unless $memberName =~ m@\.xhtml$@;
 		next if $memberName eq "nav.xhtml";
-		
+
 		# Grab the entire contents and look for an ID.
 		$contents = $zip->contents($memberName);
 		my $id = $contents =~ m@<div id=\"([^\"]+)\" class=\"section@s
@@ -210,16 +223,16 @@ sub arrange_epub
 			: ($contents =~ m@<section id=\"([^\"]+)\" class=\"level1@s
 			   ? $1
 			   : undef);
-		
+
 		next unless defined $id;
-		
+
 		# Report what we are processing.
 		print STDERR "  $memberName ($id)\n" if $VERBOSE;
 
 		# Save the chapter and ID for when we rearrange the `content.opf` file.
 		$chapter_ids{$id} = $memberName;
 		$chapter_ids{$id} =~ s@\.xhtml$@@;
-		
+
 		# We have special processing for some of these categories.
 		if ($id eq "legal")
 		{
@@ -231,32 +244,32 @@ sub arrange_epub
 			update_dedication(\$contents);
 			$changed = 1;
 		}
-		
+
 		# Update breaks.
 		$changed += update_captions(\$contents);
 		$changed += update_breaks(\$contents);
 		$changed += update_epigraphs(\$contents) if $EPIGRAPHS;
-		
+
 		# Update the file.
 		$zip->contents($memberName, $contents);
-		
+
 		# Remove the chapters and appendixes section.
 		$zip->removeMember($memberName)
 			if $id eq "chapters"
 			or $id eq "appendixes"
 			or $id eq "frontmatter";
 	}
-	
+
 	# Parse the `content.opf` to see if we have a legal.
 	$contents = $zip->contents("content.opf");
 	$changed += update_opf(\$contents);
 	$zip->contents("content.opf", $contents);
-	
+
 	# Parse the `toc.ncx` and remove items.
 	$contents = $zip->contents("toc.ncx");
 	$changed += update_ncx(\$contents);
 	$zip->contents("toc.ncx", $contents);
-	
+
 	# If we changed, write it out.
 	$zip->overwrite() if $changed;
 }
@@ -486,7 +499,7 @@ sub update_epigraphs
 	{
 		# Process the contents.
 		my $contents = $1;
-		
+
 		$contents = decode_utf8($contents);
 
 		# Look for an attribution.
@@ -514,7 +527,7 @@ sub get_array_index
 	my $index = 0;
 	++$index until $items[$index] =~ m@$attr="$chapter"@
 		|| $index > $#items;
-	
+
 	$index = -1 if $index == $#items;
 
 	return $index;
@@ -529,7 +542,7 @@ sub extract_item
 	{
 		my $chapter = $chapter_ids{$id};
 		my $index = get_array_index($items, $attr, $chapter);
-		
+
 		if ($index >= 0)
 		{
 			push @list, splice(@$items, $index, 1);

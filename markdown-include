@@ -137,7 +137,7 @@ while (@lines)
 		# the next header. And that resulting header is the same level
 		# or higher.
 		my ($found, $links, $count) = check_list_section(\@lines, 0);
-		
+
 		if ($found)
 		{
 			# We are in a list section.
@@ -147,24 +147,24 @@ while (@lines)
 
 			# Remove the lines for the section.
 			splice(@lines, 0, $count);
-			
+
 			# If we aren't stripping, add this line.
 			unless ($STRIP_LIST_SECTIONS)
 			{
 				push @new_lines, $line;
 				$atx_header .= "#";
 			}
-			
+
 			# Insert all the sections.
 			foreach my $link (@$links)
 			{
 				# Insert the file.
 				print STDERR "  $link\n" if $VERBOSE;
-				
+
 				push @new_lines, insert_file(
 					$dir_path, $link, $atx_header, $attrs, $section_attrs);
 			}
-			
+
 			# Finish up.
 			next;
 		}
@@ -242,7 +242,7 @@ sub read_yaml
 		my @yaml = shift @$lines;
 		push @yaml, shift @$lines while $$lines[0] ne "---";
 		push @yaml, shift @$lines;
-		
+
 		# Combine everything together. We also mask tabs into spaces
 		# because YAML doesn't allow for tabs but I'm not going to
 		# change my tab key to fit their conventions.
@@ -284,7 +284,7 @@ sub gather_images
 	die "Cannot parse file $href"
 		unless $href =~ m@^(.*)\.(\w+)$@;
 	my ($basename, $extension) = ($1, $2);
-		
+
 	# If we are converting images, do that.
 	$extension = "jpg" if $CONVERT_IMAGES;
 
@@ -347,6 +347,7 @@ sub insert_file
 {
 	# Pull out the variables.
 	my ($dir, $file, $atx, $class, $section_attrs) = @_;
+	print STDERR "  Processing $file\n" if $VERBOSE;
 
 	# Figure out the path of the file.
 	my $path = Cwd::abs_path($file);
@@ -382,7 +383,7 @@ sub insert_file
 		# Add the line in the list.
 		push @lines, $_;
 	}
-	
+
 	close $fh;
 
 	# Read in the header.
@@ -408,8 +409,12 @@ sub insert_file
 	# Figure out the header. We have to have a blank line before the
 	# header because of Pandoc's limtiations.
 	my @inserted = ("");
+	my $title = defined $$yaml{title} ? $$yaml{title} : "";
 
-	push @inserted, "$atx " . $$yaml{title} . "$class";
+	print STDERR "    Missing title from the file\n"
+		if $VERBOSE && $title eq "";
+
+	push @inserted, "$atx $title$class";
 	push @inserted, @lines;
 	push @inserted, "";
 
