@@ -38,7 +38,7 @@ my $VERBOSE = 0;
 # Constants
 #
 
-my $LINK_REGEX = '\[([^\]]+)\]\(([^\)]+)\)\{([^\}]+)\}';
+my $LINK_REGEX = '(!?)\[([^\]]+)\]\(([^\)]+)\)\{([^\}]+)\}';
 
 #
 # UTF-8
@@ -98,11 +98,11 @@ while (@lines)
 	while ($line =~ s@$LINK_REGEX@PLACEHOLDER@)
 	{
 		# Save the captures.
-		my ($title, $href, $attrs) = ($1, $2, $3);
+		my ($bang, $title, $href, $attrs) = ($1, $2, $3, $4);
 
 		# See if we are in the attribute list.
 		my @attrs = split(/\s+/, $attrs);
-		my $replace = "[$title]($href)";
+		my $replace = $bang . "[$title]($href)";
 
 		map { $replace = "" if exists $FILTERS{$_} } @attrs;
 
@@ -163,7 +163,7 @@ sub read_yaml
 		my @yaml = shift @$lines;
 		push @yaml, shift @$lines while $$lines[0] ne "---";
 		push @yaml, shift @$lines;
-		
+
 		# Combine everything together. We also mask tabs into spaces
 		# because YAML doesn't allow for tabs but I'm not going to
 		# change my tab key to fit their conventions.

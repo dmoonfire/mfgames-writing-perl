@@ -230,7 +230,7 @@ sub combine_files
 		or die "Cannot write $working/combined.tex";
 
 	print STDERR "  Writing combined.tex\n" if $VERBOSE;
-	
+
 	foreach my $glob (glob("$working/??-*.tex"))
 	{
 		print STDERR "    Reading $glob\n" if $VERBOSE;
@@ -278,7 +278,7 @@ sub gather_formats
 	my $script_dir = dirname($0);
 	my $script_data_dir = "$script_dir/data";
 	my $script_data_latex_dir = "$script_data_dir/latex";
-	
+
 	gather_formats_dir($working, $script_data_dir);
 	gather_formats_dir($working, $script_data_latex_dir);
 
@@ -310,7 +310,7 @@ sub gather_formats_dir
 	{
 		# Grab the basename and figure out the format.
 		my $basename = basename($file);
-		
+
 		die "Cannot read format $basename"
 			unless $basename =~ m@^\d\d-(.*?)?\.tex$@;
 
@@ -569,7 +569,7 @@ sub pandoc_section
 {
 	# Pull out the information we need.
 	my ($working, $id, $numeric) = @_;
-   
+
 	print STDERR "  Generating $id section in LaTeX\n"
 		if $VERBOSE;
 

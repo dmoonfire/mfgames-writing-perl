@@ -48,7 +48,7 @@ my $CONVERT = "convert";
 #
 
 my $ATX_HEADER_REGEX = '^\s{0,3}(\#+)\s*(.*?)(?:\s*\{(.*?)\}\s*)?$';
-my $IMAGE_REGEX = '\!\[([^\]]*)\]\(([^\)]+)\)';
+my $IMAGE_REGEX = '\!\[([^\]]*)\]\(([^\)]+)\)(\{.*?\})';
 
 #
 # UTF-8
@@ -275,7 +275,7 @@ sub gather_images
 	return unless $$line =~ m@$IMAGE_REGEX@;
 
 	# Pull out the variables from the above match.
-	my ($title, $href) = ($1, $2);
+	my ($title, $href, $attr) = ($1, $2, $3);
 	my $image = "$dir/$href";
 
 	die "Cannot find image $image" unless -f $image;
@@ -294,7 +294,7 @@ sub gather_images
 	system($CONVERT, $image, $gathered);
 
 	# Rewrite the link.
-	$$line = "![$title]($basename.$extension)";
+	$$line = "![$title]($basename.$extension)$attr";
 }
 
 #
