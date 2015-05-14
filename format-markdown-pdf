@@ -181,6 +181,7 @@ foreach my $filename (@ARGV)
 	format_epigraphs("$working/51-mainmatter.tex") if $EPIGRAPHS;
 	format_lettrine("$working/51-mainmatter.tex") if $LETTRINE;
 	unnumber_sections("$working/51-mainmatter.tex");
+	adjust_images("$working/51-mainmatter.tex");
 
 	# Go through and pull in the formats.
 	gather_formats($working);
@@ -310,9 +311,10 @@ sub gather_formats_dir
 	{
 		# Grab the basename and figure out the format.
 		my $basename = basename($file);
+		$basename =~ s@\.tex$@@;
 
 		die "Cannot read format $basename"
-			unless $basename =~ m@^\d\d-(.*?)?\.tex$@;
+			unless $basename =~ m@^\d\d-(.*?)?$@;
 
 		my $format = $1;
 
