@@ -28,10 +28,11 @@ my $ATX_HEADER_REGEX = '^\s{0,3}(\#+)\s*(.*?)(?:\s*\{(.*?)\}\s*)?$';
 # Variables
 my $DEBUG = 0;
 my $EPIGRAPHS = 0;
-my @FILTER_LINKS = ();
 my $INCLUDE = 0;
 my $OUTPUT = undef;
+my $STACK_SIZE = undef;
 my $VERBOSE = 0;
+my @FILTER_LINKS = ();
 
 # Files
 my $MARKDOWN_EXTRACT = "markdown-extract";
@@ -47,6 +48,7 @@ my $PANDOC = "pandoc";
 	"filter-links=s" => \@FILTER_LINKS,
 	"include|i!" => \$INCLUDE,
 	"reference|r=s" => \$REFERENCE,
+	"stack-size=s" => \$STACK_SIZE,
 	"output|o=s" => \$OUTPUT,
 	"verbose|v!" => \$VERBOSE,
 	);
@@ -149,7 +151,7 @@ sub update_odt_style
 {
 	my ($zip, $title, $author) = @_;
 	my $contents = $zip->contents("styles.xml");
-	
+
 	$contents =~ s@{{TITLE}}@$title@sg;
 	$contents =~ s@{{AUTHOR}}@$author@sg;
 
@@ -166,7 +168,7 @@ sub update_odt_contents
 	my ($in_toc, $in_legal, $in_dedication) = (0, 0, 0);
 	my $first_para = 0;
 	my %quotations = ();
-	
+
 	foreach my $line (@input)
 	{
 		# Look for styles.
@@ -290,6 +292,11 @@ sub generate_odt
 		"--smart",
 		"--normalize");
 
+	if (defined $STACK_SIZE)
+	{
+		push @arguments, "+RTS", "-K$STACK_SIZE", "-RTS";
+	}
+
 	# Run the command.
 	execute("  ", @arguments);
 
@@ -300,7 +307,7 @@ sub generate_odt
 sub copy_reference_odt
 {
 	my $working = shift @_;
-	
+
 	system("cp", $REFERENCE, "$working/reference.odt")
 		if defined $REFERENCE && -f $REFERENCE;
 	system(
@@ -367,7 +374,7 @@ sub create_toc
 			$first_mainmatter
 			&& $is_mainmatter
 			&& $first_frontmatter == 0;
-		
+
 		if ($is_first_backmatter || $is_first_mainmatter)
 		{
 			push @sections, "\\";
@@ -403,7 +410,7 @@ sub create_toc
 			my ($title, $attrs) = ($2, $3);
 			m@(\#[^\s\}]+)@;
 			my $id = $1;
-			
+
 			# Figure out the attributes.
 			my $is_backmatter = $attrs =~ m@\.backmatter@;
 			my $is_frontmatter = $attrs =~ m@\.frontmatter@;
