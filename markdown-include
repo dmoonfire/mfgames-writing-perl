@@ -29,6 +29,7 @@ my $CONVERT_IMAGES = 0;
 my $EXPAND_IDS = 0;
 my $IMAGES_DIR = undef;
 my $OUTPUT = "-";
+my $SCALE_IMAGES = undef;
 my $STRIP_LIST_SECTIONS = 0;
 my $VERBOSE = 0;
 
@@ -39,6 +40,7 @@ my $CONVERT = "convert";
 	"expand-ids|i!" => \$EXPAND_IDS,
 	"images-dir=s" => \$IMAGES_DIR,
 	"output|o=s" => \$OUTPUT,
+	"scale-images=s" => \$SCALE_IMAGES,
 	"strip!" => \$STRIP_LIST_SECTIONS,
 	"verbose|v!" => \$VERBOSE,
 	);
@@ -85,7 +87,7 @@ close FILE;
 # YAML Processing
 #
 
-my $yaml = read_yaml(\@lines);
+my $yaml = read_yaml($file, \@lines);
 
 #
 # Line Processing
@@ -233,6 +235,7 @@ close $out if $OUTPUT ne "-";
 
 sub read_yaml
 {
+	my $filename = shift @_;
 	my $lines = shift @_;
 	my $yaml = undef;
 
@@ -240,7 +243,14 @@ sub read_yaml
 	{
 		# Pull out the YAML header from the lines.
 		my @yaml = shift @$lines;
-		push @yaml, shift @$lines while $$lines[0] ne "---";
+
+		while (defined $$lines[0])
+		{
+			#print "* ", $$lines[0], "\n";
+			push @yaml, shift @$lines;
+			last if defined $$lines[0] && $$lines[0] =~ m@^---@;
+		}
+
 		push @yaml, shift @$lines;
 
 		# Combine everything together. We also mask tabs into spaces
@@ -291,7 +301,11 @@ sub gather_images
 	# Copy the image into the new location.
 	my $gathered = "$IMAGES_DIR/$basename.$extension";
 
-	system($CONVERT, $image, $gathered);
+	my @convert_command = ($CONVERT, $image);
+	push @convert_command, "-scale", $SCALE_IMAGES if defined $SCALE_IMAGES;
+	push @convert_command, $gathered;
+
+	system(@convert_command);
 
 	# Rewrite the link.
 	$attr = defined $attr ? $attr : "";
@@ -352,6 +366,7 @@ sub insert_file
 
 	# Figure out the path of the file.
 	my $path = Cwd::abs_path($file);
+	print STDERR "  Path: $path\n" if $VERBOSE;
 	my $path_dir = dirname($file);
 
 	# Load in this file.
@@ -388,7 +403,7 @@ sub insert_file
 	close $fh;
 
 	# Read in the header.
-	my $yaml = read_yaml(\@lines);
+	my $yaml = read_yaml($file, \@lines);
 
 	# Grab the title.
 	my $id = undef;

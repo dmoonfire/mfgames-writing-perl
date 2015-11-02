@@ -27,10 +27,11 @@ my $DEBUG = 0;
 my $DEDICATION = 0;
 my $EPIGRAPHS = 0;
 my $EPUB3 = 0;
-my @FILTER_LINKS = ();
 my $INCLUDE = 0;
 my $OUTPUT = undef;
+my $SCALE_IMAGES = undef;
 my $VERBOSE = 0;
+my @FILTER_LINKS = ();
 
 # Files
 my $COVER = undef;
@@ -55,6 +56,7 @@ my $PANDOC = "pandoc";
 	"include|i!" => \$INCLUDE,
 	"metadata|m=s" => \$METADATA,
 	"output|o=s" => \$OUTPUT,
+	"scale-images=s" => \$SCALE_IMAGES,
 	"verbose|v!" => \$VERBOSE,
 	);
 
@@ -93,13 +95,15 @@ foreach my $filename (@ARGV)
 
 	# Extract and normalize the Markdown.
 	print STDERR "  Expanding source file\n" if $VERBOSE;
-	execute(
-		"  ",
+	my @include_commands = (
 		$MARKDOWN_INCLUDE,
 		"--output=$working/include.markdown",
 		"--images-dir=$working",
 		"--convert-images",
 		$filename);
+	push @include_commands, "--scale-images=$SCALE_IMAGES"
+		if defined $SCALE_IMAGES;
+	execute("  ", @include_commands);
 
 	# Make sure the file exists.
 	die "Cannot find $working/include.markdown"
@@ -236,11 +240,13 @@ sub arrange_epub
 		# We have special processing for some of these categories.
 		if ($id eq "legal")
 		{
+			print STDERR "    legal\n" if $VERBOSE;
 			update_legal(\$contents);
 			$changed = 1;
 		}
 		elsif ($DEDICATION && $id eq "dedication")
 		{
+			print STDERR "    dedication\n" if $VERBOSE;
 			update_dedication(\$contents);
 			$changed = 1;
 		}
