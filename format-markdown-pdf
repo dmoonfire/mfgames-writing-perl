@@ -41,17 +41,23 @@ my $MARKDOWN_FILTER_LINKS = "markdown-filter-links";
 my $PANDOC = "pandoc";
 my $LATEXRUN = "latexrun";
 my $LATEX = "xelatex";
+my $DEDICATION_ID = "dedication";
+my $LEGAL_ID = "legal";
+my $ACKNOWLEDGMENTS_ID = "acknowledgments";
 
 # Command-Line Options
 &GetOptions(
+	"acknowledgments-id=s" => \$ACKNOWLEDGMENTS_ID,
 	"block-backmatter!" => \$BLOCK_BACKMATTER,
 	"copy=s" => \@COPY,
 	"debug|d!" => \$DEBUG,
+	"dedication-id=s" => \$DEDICATION_ID,
 	"epigraphs!" => \$EPIGRAPHS,
 	"figures!" => \$USE_FIGURES,
 	"filter-links=s" => \@FILTER_LINKS,
 	"format|f=s" => \@FORMATS,
 	"include|i!" => \$INCLUDE,
+	"legal-id=s" => \$LEGAL_ID,
 	"lettrine!" => \$LETTRINE,
 	"library|L=s" => \@LIBRARIES,
 	"mainmatter-filter=s" => \@MAINMATTER_FILTER,
@@ -134,7 +140,7 @@ foreach my $filename (@ARGV)
 
 	extract_section($working, "source.markdown", "class", "frontmatter");
 
-	for my $id (qw(legal dedication acknowledgments))
+	for my $id (qw($LEGAL_ID $DEDICATION_D $ACKNOWLEDGMENTS_ID))
 	{
 		my $has_section = extract_section(
 			"$working",
@@ -192,9 +198,9 @@ foreach my $filename (@ARGV)
 	extract_mainmatter($working);
 	pandoc_section($working, "mainmatter", 51);
 	remove_labels("$working/51-mainmatter.tex");
-	filter_mainmatter($working, "51-mainmatter.tex", @MAINMATTER_FILTER);
 	format_epigraphs("$working/51-mainmatter.tex") if $EPIGRAPHS;
 	format_lettrine("$working/51-mainmatter.tex") if $LETTRINE;
+	filter_mainmatter($working, "51-mainmatter.tex", @MAINMATTER_FILTER);
 	unnumber_sections("$working/51-mainmatter.tex");
 	adjust_images("$working/51-mainmatter.tex") unless $USE_FIGURES;
 
@@ -373,6 +379,20 @@ sub filter_mainmatter
 
 	# If we don't have a filter, just pass it on.
 	return unless @_;
+
+	# Make sure that all the filters exist.
+	my $errors = 0;
+
+	foreach my $filter (@_)
+	{
+		if (! -x $filter)
+		{
+			print STDERR "Filter does not exist: $filter\n";
+			$errors = 1;
+		}
+	}
+
+	exit 1 if $errors;
 
 	# Filter out the text.
 	print STDERR "  Filters: " . join(", ", @_), "\n" if $VERBOSE;
@@ -743,9 +763,9 @@ sub extract_mainmatter
 		"$working/source.markdown",
 		"--not",
 		"--yaml",
-		"--id=legal",
-		"--id=dedication",
-		"--id=acknowledgments",
+		"--id=$LEGAL_ID",
+		"--id=$DEDICATION_ID",
+		"--id=$ACKNOWLEDGMENTS_ID",
 		"--class=backmatter",
 		"--output=$working/mainmatter.markdown");
 	print STDERR "  Extracted main matter\n" if $VERBOSE;
