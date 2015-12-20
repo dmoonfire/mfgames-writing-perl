@@ -32,6 +32,7 @@ my $OUTPUT = undef;
 my $SCALE_IMAGES = undef;
 my $VERBOSE = 0;
 my @FILTER_LINKS = ();
+my $REMOVE_TOC = 0;
 
 # Files
 my $COVER = undef;
@@ -56,6 +57,7 @@ my $PANDOC = "pandoc";
 	"include|i!" => \$INCLUDE,
 	"metadata|m=s" => \$METADATA,
 	"output|o=s" => \$OUTPUT,
+	"remove-toc!" => \$REMOVE_TOC,
 	"scale-images=s" => \$SCALE_IMAGES,
 	"verbose|v!" => \$VERBOSE,
 	);
@@ -141,7 +143,7 @@ foreach my $filename (@ARGV)
 
 	# Generate the EPUB.
 	generate_epub($working);
-	arrange_epub("$working/combined.epub");
+	arrange_epub("$working/combined.epub", $title);
 
 	# Verify the results.
 	execute(" ", $EPUBCHECK, "$working/combined.epub");
@@ -193,7 +195,7 @@ sub get_metadata
 sub arrange_epub
 {
 	# Get the variable.
-	my ($epub_filename) = @_;
+	my ($epub_filename, $title) = @_;
 
 	# Open the EPUB as a ZIP archive.
 	my $zip = Archive::Zip->new();
@@ -206,9 +208,12 @@ sub arrange_epub
 	%chapter_ids = ();
 	$changed = 0;
 
-	# Handle the special cases.
-	my $contents = $zip->contents("nav.xhtml");
-	$changed += update_navigation(\$contents);
+	# Handle the table of contents (nav.xhtml).
+	my $contents = "";
+
+	# If we aren't removing the TOC, update it.
+	$contents = $zip->contents("nav.xhtml");
+	$changed += update_navigation(\$contents, $title);
 	$zip->contents("nav.xhtml", $contents);
 
 	# Go through the rest of the entries.
@@ -285,6 +290,7 @@ sub update_navigation
 {
 	# Grab the values.
 	my $ref = shift @_;
+	my $title = shift @_;
 
 	# Remove the links for the frontmatter.
 	my @remove_ids = ();
@@ -338,6 +344,12 @@ sub update_navigation
 	$b_contents =~ s@</ol>@</ul>@sg if defined $b_contents;
 	$$ref =~ s@PLACEHOLDER@$a_contents@sg;
 	$$ref =~ s@SECONDHOLDER@$b_contents@sg if defined $b_contents;
+
+	# If we are removing the TOC, replace it with a half-title page.
+	if ($REMOVE_TOC)
+	{
+		$$ref =~ s@(<h1 id="toc-title")>.*?<(/h1>).*</body>@$1>$title<$2</div></body>@sg;
+	}
 
 	# Return if we've changed.
 	return 1;
