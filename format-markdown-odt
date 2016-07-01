@@ -152,8 +152,8 @@ sub update_odt_style
 	my ($zip, $title, $author) = @_;
 	my $contents = $zip->contents("styles.xml");
 
-	$contents =~ s@{{TITLE}}@$title@sg;
-	$contents =~ s@{{AUTHOR}}@$author@sg;
+	$contents =~ s@\{\{TITLE\}\}@$title@sg;
+	$contents =~ s@\{\{AUTHOR\}\}@$author@sg;
 
 	$zip->contents("styles.xml", $contents);
 }

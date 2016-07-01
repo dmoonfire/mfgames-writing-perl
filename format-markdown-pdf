@@ -140,7 +140,7 @@ foreach my $filename (@ARGV)
 
 	extract_section($working, "source.markdown", "class", "frontmatter");
 
-	for my $id (qw($LEGAL_ID $DEDICATION_D $ACKNOWLEDGMENTS_ID))
+	for my $id (($LEGAL_ID, $DEDICATION_ID, $ACKNOWLEDGMENTS_ID))
 	{
 		my $has_section = extract_section(
 			"$working",
@@ -200,6 +200,7 @@ foreach my $filename (@ARGV)
 	remove_labels("$working/51-mainmatter.tex");
 	format_epigraphs("$working/51-mainmatter.tex") if $EPIGRAPHS;
 	format_lettrine("$working/51-mainmatter.tex") if $LETTRINE;
+	format_breaks("$working/51-mainmatter.tex");
 	filter_mainmatter($working, "51-mainmatter.tex", @MAINMATTER_FILTER);
 	unnumber_sections("$working/51-mainmatter.tex");
 	adjust_images("$working/51-mainmatter.tex") unless $USE_FIGURES;
@@ -495,6 +496,7 @@ sub format_epigraphs
 			my $epigraph = join("\n", @quote);
 			$epigraph = "\\epigraph{\\epigraphfont {$epigraph}}";
 			$epigraph =~ s@—\s*(.*?)\}\}@\}\}{\\epigraphattributionfont {—$1}}@sg;
+			$epigraph .= "\n";
 
 			# Add the epigraph to the lines.
 			push @lines, $epigraph;
@@ -574,6 +576,36 @@ sub format_lettrine
 	close FILE;
 }
 
+sub format_breaks
+{
+	my ($chapter_file) = @_;
+
+	# Read in the file, excluding the chapter.
+	print STDERR "  Reading $chapter_file to escape breaks\n"
+		if $VERBOSE;
+
+	open FILE, "<:encoding(utf8)", $chapter_file
+		or die "Cannot read $chapter_file ($!)";
+
+	my @lines = ();
+	my $first_para = 0;
+
+	while (<FILE>)
+	{
+		s@\\begin\{center\}\\rule\{0.5\\linewidth\}\{\\linethickness\}\\end\{center\}@\\sectionbreak@sg;
+		s@\\begin\{center\}\\rule\{3in\}\{0.4pt\}\\end\{center\}@\\sectionbreak@sg;
+		push @lines, $_;
+	}
+
+	close FILE;
+
+	# Write out the chapter.
+	open FILE, ">:encoding(utf8)", $chapter_file
+		or die "Cannot write $chapter_file ($!)";
+	print FILE join("", @lines);
+	close FILE;
+}
+
 sub remove_labels
 {
 	my ($chapter_file) = @_;
@@ -627,7 +659,7 @@ sub pandoc_section
 	open(
 		PIPE,
 		"-|:encoding(utf8)",
-		"$PANDOC $working/$id.markdown -t latex --no-tex-ligatures --smart --chapters --no-wrap")
+		"$PANDOC $working/$id.markdown -t latex --no-tex-ligatures --smart --chapters --wrap=none")
 		or die "Cannot open pipe to $PANDOC ($!)";
 
 	while (<PIPE>)
@@ -681,7 +713,15 @@ sub make_block
 		{
 			$line =~ s@\\hspace\*\{0\.333em\}@\\\\@sg;
 			$line =~ s@\\{4}@\\\\\\vskip 1\\baselineskip @sg;
-			print FILE '\noindent ', $line, ' \vskip 1\baselineskip', "\n";
+
+			if ($line =~ s@\\\\$@@)
+			{
+				print FILE '\noindent ', $line, ' \vskip 0\baselineskip', "\n";
+			}
+			else
+			{
+				print FILE '\noindent ', $line, ' \vskip 1\baselineskip', "\n";
+			}
 		}
 	}
 

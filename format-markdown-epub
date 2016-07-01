@@ -543,6 +543,7 @@ sub get_array_index
 	my ($items, $attr, $chapter) = @_;
 	my @items = @$items;
 	my $index = 0;
+
 	++$index until $items[$index] =~ m@$attr="$chapter"@
 		|| $index > $#items;
 
@@ -585,6 +586,7 @@ sub generate_epub
 	# Build the command.
 	my @arguments = (
 		$PANDOC,
+		"+RTS", "-M184467440737095516", "-RTS",
 		"$working/source.markdown",
 		"-o", "$working/combined.epub",
 		"-t", $EPUB3 ? "epub3" : "epub",

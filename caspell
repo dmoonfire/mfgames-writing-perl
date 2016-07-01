@@ -132,7 +132,7 @@ if (defined $a_index)
 				$dictionary{$input} = 1;
 				save_dictionary();
 			}
-			
+
 			# We don't need to do anything.
 			next;
 		}
@@ -199,7 +199,7 @@ if (defined $a_index)
 			last if ($got =~ m@^\s*$@s);
 		}
 	}
-	
+
 	# We're done with pipe processing.
 	exit 0;
 }
@@ -223,9 +223,9 @@ sub load_dictionary
 
 	# Load the home directory.
 	my $home_dict = $ENV{"HOME"} . "/.config/mfgames-writing-perl/local.words";
-	
+
 	include_dictionary_file($ENV{"HOME"}, $home_dict);
-	
+
 	# Load the dictionary file.
 	my $local_dict = "$LOCAL_DIR/local.words";
 
@@ -245,7 +245,7 @@ sub include_dictionary_file
 
 	my @directives_ignore = ();
 	my @comments_ignore = ();
-	
+
 	load_dictionary_file(
 		$dir,
 		$dict,
@@ -291,7 +291,7 @@ sub load_dictionary_file
 
 		# Clean up the line and pull out the operation.
 		chomp;
-		
+
 		die "Cannot parse line $.: $_"
 			unless m@^(\#|\w+)\s+(.*?)$@;
 
@@ -332,9 +332,9 @@ sub load_dictionary_file
 						my @empty = ();
 						$suggestions_include{$suggest} = \@empty;
 					}
-					
+
 					log_line("Adding $argument to $suggest");
-					push $suggestions_include{$suggest}, $argument;
+					push @{$suggestions_include{$suggest}}, $argument;
 				}
 			}
 		}
@@ -447,7 +447,7 @@ sub process_command
 {
 	# Parse the command.
 	my ($dict, $line) = @_;
-	
+
 	die "Cannot parse command: $line"
 		unless $line =~ m@^((?:(?:map|remove) )?\w+)\s*(.*?)$@;
 
@@ -516,7 +516,7 @@ sub check_word
 	my $l_i = exists $dictionary_include{$lc_search};
 
 	log_line("Check $search/$lc_search $s_d $l_d $s_i $l_i");
-	
+
 	if ($s_d || $l_d || $s_i || $l_i)
 	{
 		log_line("Found: $search");

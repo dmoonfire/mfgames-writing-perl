@@ -1,0 +1,39 @@
+#!/usr/bin/perl
+
+#
+# Setup
+#
+
+# Directives
+use strict;
+use warnings;
+
+# Modules
+
+#
+# Processing
+#
+
+# Whenever we load files, we slurp the entire thing into memory.
+$/ = undef;
+
+foreach my $file (@ARGV)
+{
+	# Go through the file and get the count, but without the YAML
+	# header that starts most of the markdown files.
+	unless (-f $file)
+	{
+		next;
+	}
+
+	open INPUT, "<$file" or die "Cannot open file '$file' ($!)";
+	my $buffer = <INPUT>;
+	close INPUT;
+
+	# Remove the YAML header, if it is in the file.
+	$buffer =~ s/^---\n.*?\n---\n//s;
+
+	# Count the remaining words in the buffer.
+	$buffer =~ s/\s+/ /sg;
+	print "$buffer\n";
+}
