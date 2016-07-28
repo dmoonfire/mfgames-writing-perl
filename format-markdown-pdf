@@ -33,6 +33,7 @@ my @FILTER_LINKS = ();
 my @FORMATS = ();
 my @LIBRARIES = ();
 my @MAINMATTER_FILTER = ();
+my $STOP_BLOCK_FORMAT_AFTER_SECTION = undef;
 
 # Files
 my $MARKDOWN_INCLUDE = "markdown-include";
@@ -44,6 +45,8 @@ my $LATEX = "xelatex";
 my $DEDICATION_ID = "dedication";
 my $LEGAL_ID = "legal";
 my $ACKNOWLEDGMENTS_ID = "acknowledgments";
+my $NOTES_ID = "notes-will-never-happen";
+my $PREVIOUSLY_ID = "previously-will-never-happen";
 
 # Command-Line Options
 &GetOptions(
@@ -61,7 +64,10 @@ my $ACKNOWLEDGMENTS_ID = "acknowledgments";
 	"lettrine!" => \$LETTRINE,
 	"library|L=s" => \@LIBRARIES,
 	"mainmatter-filter=s" => \@MAINMATTER_FILTER,
+	"notes-id=s" => \$NOTES_ID,
 	"output|o=s" => \$OUTPUT,
+	"previously-id=s" => \$PREVIOUSLY_ID,
+	"stop-block-after=i" => \$STOP_BLOCK_FORMAT_AFTER_SECTION,
 	"verbose|v!" => \$VERBOSE,
 	);
 
@@ -140,7 +146,7 @@ foreach my $filename (@ARGV)
 
 	extract_section($working, "source.markdown", "class", "frontmatter");
 
-	for my $id (($LEGAL_ID, $DEDICATION_ID, $ACKNOWLEDGMENTS_ID))
+	for my $id (($LEGAL_ID, $DEDICATION_ID, $ACKNOWLEDGMENTS_ID, $NOTES_ID, $PREVIOUSLY_ID))
 	{
 		my $has_section = extract_section(
 			"$working",
@@ -158,7 +164,9 @@ foreach my $filename (@ARGV)
 			pandoc_section($working, $id, $index);
 			adjust_images($section_output);
 
-			if ($id eq "acknowledgments")
+			if ($id eq $ACKNOWLEDGMENTS_ID ||
+				$id eq $PREVIOUSLY_ID ||
+				$id eq $NOTES_ID)
 			{
 				unlist_chapter($section_output);
 			}
@@ -199,6 +207,7 @@ foreach my $filename (@ARGV)
 	pandoc_section($working, "mainmatter", 51);
 	remove_labels("$working/51-mainmatter.tex");
 	format_epigraphs("$working/51-mainmatter.tex") if $EPIGRAPHS;
+	format_quotes("$working/51-mainmatter.tex");
 	format_lettrine("$working/51-mainmatter.tex") if $LETTRINE;
 	format_breaks("$working/51-mainmatter.tex");
 	filter_mainmatter($working, "51-mainmatter.tex", @MAINMATTER_FILTER);
@@ -467,6 +476,54 @@ sub adjust_images
 	close FILE;
 }
 
+sub format_quotes
+{
+	my ($chapter_file) = @_;
+
+	# Read in the file.
+	print STDERR "  Reading $chapter_file to format quotes\n"
+		if $VERBOSE;
+
+	open FILE, "<:encoding(utf8)", $chapter_file
+		or die "Cannot read $chapter_file ($!)";
+
+	my @lines = ();
+	my $between_quotes = 0;
+	my @quote = ();
+
+	while (<FILE>)
+	{
+		if (m@\\end\{quote\}@)
+		{
+			$between_quotes = 1;
+		}
+		elsif (m@^\s*$@) {}
+		elsif (m@\\begin\{quote\}@ && $between_quotes)
+		{
+			# If we are still between quotes, then we want to merge them
+			# together.
+			my $popped = pop @lines;
+			$popped = pop @lines until ($popped =~ m@\\end\{quote\}@);
+			push @lines, "\n";
+			next;
+		}
+		else
+		{
+			$between_quotes = 0;
+		}
+
+		push @lines, $_;
+	}
+
+	close FILE;
+
+	# Write out the file.
+	open FILE, ">:encoding(utf8)", $chapter_file
+		or die "Cannot write $chapter_file ($!)";
+	print FILE join("", @lines);
+	close FILE;
+}
+
 sub format_epigraphs
 {
 	my ($chapter_file) = @_;
@@ -700,17 +757,53 @@ sub make_block
 	close FILE;
 
 	# Write out the chapter.
+	my $section = 0;
+	my $first_after_section = 1;
 	open FILE, ">:encoding(utf8)", $chapter_file
 		or die "Cannot write $chapter_file ($!)";
 
 	foreach my $line (@lines)
 	{
+		# Figure out if we are stopping after a section break.
+		my $is_section = 0;
+
+		if ($line =~ m@\\begin\{center\}\\rule@)
+		{
+			$section++;
+			$is_section = 1;
+			$first_after_section = 1;
+		}
+
+		# Process the rest of the lines.
 		if ($line =~ m@^\s*$@)
 		{
 		 	print FILE "\n";
 		}
+		elsif ($line =~ s@\s*\\\{:\.center\\\}@@)
+		{
+			# Pandoc will escape our attributes, so we search for "\{".
+			print FILE '\begin{tightcenter}' . "\n$line\n" . '\end{tightcenter}';
+			#print FILE "\\makebox[\\textwidth]{$line}\n\\vskip 0\\baselineskip\n";
+		}
 		else
 		{
+			# See if we are formatting after a section.
+			if (defined $STOP_BLOCK_FORMAT_AFTER_SECTION && $STOP_BLOCK_FORMAT_AFTER_SECTION <= $section)
+			{
+				# If this is the first after the section, then don't indent the
+				# first paragraph.
+				if ($first_after_section && !$is_section)
+				{
+					$first_after_section = 0;
+					$line = "\\noindent $line";
+				}
+
+				# This is a normal paragraph.
+				print FILE "$line\n\n";
+				next;
+			}
+
+			# For everything else, make it a block.
 			$line =~ s@\\hspace\*\{0\.333em\}@\\\\@sg;
 			$line =~ s@\\{4}@\\\\\\vskip 1\\baselineskip @sg;
 
@@ -806,6 +899,8 @@ sub extract_mainmatter
 		"--id=$LEGAL_ID",
 		"--id=$DEDICATION_ID",
 		"--id=$ACKNOWLEDGMENTS_ID",
+		"--id=$NOTES_ID",
+		"--id=$PREVIOUSLY_ID",
 		"--class=backmatter",
 		"--output=$working/mainmatter.markdown");
 	print STDERR "  Extracted main matter\n" if $VERBOSE;

@@ -113,7 +113,7 @@ while (@lines)
 
 		# Pull out the options, which are space-separated.
 		my @options = split(/\s+/, $options);
-		
+
 		my %ids = ();
 		my %classes = ();
 		map { $ids{$_} = 1 if $_ =~ s@^\#@@ } @options;
@@ -138,6 +138,7 @@ while (@lines)
 		unless (%ids)
 		{
 			my $id = lc($title);
+			$id =~ s@[']@@sg;
 			$id =~ s@\s+@-@sg;
 			$id =~ s@^\d+@@sg;
 			$id =~ s@^-@@sg;
@@ -188,11 +189,11 @@ sub read_yaml
 		my @yaml = shift @$lines;
 		push @yaml, shift @$lines while $$lines[0] ne "---";
 		push @yaml, shift @$lines;
-		
+
 		# Combine everything together.
 		my $yaml_buffer = join("\n", @yaml) . "\n";
 		$yaml_buffer =~ s@\t@    @sg;
-		
+
 		# Parse the YAML header.
 		($yaml, my $ignore) = Load($yaml_buffer);
 	}

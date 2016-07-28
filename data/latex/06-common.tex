@@ -4,3 +4,12 @@
 \def\endcenter{\endtrivlist}
 
 \raggedbottom
+
+%% Provide a center that doesn't add space.
+\newenvironment{tightcenter}{%
+  \setlength\topsep{0pt}
+  \setlength\parskip{0pt}
+  \begin{center}
+}{%
+  \end{center}
+}
