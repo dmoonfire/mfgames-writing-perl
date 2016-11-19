@@ -411,9 +411,10 @@ sub insert_file
 	if ($EXPAND_IDS && defined $$yaml{title})
 	{
 		$id = lc($$yaml{title});
-		$id =~ s@\s+@-@sg;
+		$id =~ s@[\'\s]+@-@sg;
 		$id =~ s@^(\d+)@id$1@sg;
-		$class = "#$id $class";
+
+		$class .= " #$id";
 	}
 
 	# Normalize the class.

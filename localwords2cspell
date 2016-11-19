@@ -38,7 +38,7 @@ foreach my $file (@ARGV)
 		my $line = $_;
 
 		# Check to see if have a LocalWords line.
-		if ($line =~ m@^\s*LocalWords:\s*(.*?)$@)
+		if ($line =~ m@^\s*LocalWords:\s*(.*?)$@i)
 		{
 			# Add each of these words into the dictionary.
 			my $words = $1;

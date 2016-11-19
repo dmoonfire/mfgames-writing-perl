@@ -199,8 +199,10 @@ sub update_odt_contents
 
 			# Figure out the ID.
 			my $id = lc($toc_title);
-			$id =~ s@\s+@-@sg;
+			$id =~ s@[’\'\s]+@-@sg;
 			$id =~ s@^(\d+)@id$1@sg;
+
+			print STDERR "ID: $id\n";
 
 			# Rebuild the line.
 			my $bookmark_start = "<text:bookmark-start text:name=\"$id\"/>";
@@ -285,6 +287,9 @@ sub generate_odt
 	# Build the command.
 	my @arguments = (
 		$PANDOC,
+		"+RTS",
+		"-K64m",
+		"-RTS",
 		"$working/toc.markdown",
 		"-o", "$working/combined.odt",
 		"--standalone",

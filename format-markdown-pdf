@@ -34,6 +34,8 @@ my @FORMATS = ();
 my @LIBRARIES = ();
 my @MAINMATTER_FILTER = ();
 my $STOP_BLOCK_FORMAT_AFTER_SECTION = undef;
+my $LOWERCASE_LETTRINE = 0;
+my $QUOTES_OUTSIDE_LETTRINE = 0;
 
 # Files
 my $MARKDOWN_INCLUDE = "markdown-include";
@@ -69,6 +71,7 @@ my $PREVIOUSLY_ID = "previously-will-never-happen";
 	"previously-id=s" => \$PREVIOUSLY_ID,
 	"stop-block-after=i" => \$STOP_BLOCK_FORMAT_AFTER_SECTION,
 	"verbose|v!" => \$VERBOSE,
+	"quotes-outside-lettrine!" => \$QUOTES_OUTSIDE_LETTRINE,
 	);
 
 # Validation
@@ -614,7 +617,7 @@ sub format_lettrine
 		elsif ($first_para)
 		{
 			# Grab the first word.
-			s@^((?:“)?)(\w)(.*?)\s+@\\lettrine[lhang=0,lraise=0.5,loversize=-0.25,lines=2,ante=$1]{$2}{$3} @
+			s@^(.)(.*?)\s+@\\lettrine[lhang=0,lraise=0.5,loversize=-0.25,lines=2,ante=]{$1}{$2} @
 				or die "Cannot parse first line $_";
 
 			# We aren't the first paragraph anymore.
