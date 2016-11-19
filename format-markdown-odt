@@ -202,8 +202,6 @@ sub update_odt_contents
 			$id =~ s@[’\'\s]+@-@sg;
 			$id =~ s@^(\d+)@id$1@sg;
 
-			print STDERR "ID: $id\n";
-
 			# Rebuild the line.
 			my $bookmark_start = "<text:bookmark-start text:name=\"$id\"/>";
 			my $bookmark_end = "<text:bookmark-end text:name=\"$id\"/>";
